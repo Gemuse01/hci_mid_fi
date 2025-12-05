@@ -283,3 +283,8 @@ yfinance==0.2.65
 zipp==3.18.2
 zope.interface==8.0.1
 zstandard==0.25.0
+fastapi
+uvicorn
+yfinace
+psycopg2-binary
+python-dotenv

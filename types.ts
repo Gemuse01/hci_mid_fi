@@ -83,3 +83,19 @@ export interface AppContextType extends AppState {
   updateDiaryEntry: (id: string, updates: Partial<DiaryEntry>) => void;
   resetApp: () => void;
 }
+
+// types.ts
+export type NewsImpact = "positive" | "negative" | "neutral";
+
+export interface NewsItem {
+  id: string;
+  title: string;
+  summary?: string;
+  publisher?: string;
+  source?: string;
+  url?: string;
+  date?: string;
+  primary_symbol?: string;
+  related_symbols?: string[];
+  impact?: NewsImpact | string;
+}
