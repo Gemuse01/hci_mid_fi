@@ -121,7 +121,7 @@ const VirtualTrading: React.FC = () => {
       }
     } catch (err) {
       console.error("Stock search failed:", err);
-      setSearchError('검색 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.');
+      setSearchError('An error occurred during the search. Please try again later.');
     } finally {
       setIsSearching(false);
     }
@@ -323,8 +323,8 @@ const VirtualTrading: React.FC = () => {
             Virtual Trading Floor
           </h1>
           <p className="text-gray-600 mt-1">
-            나스닥 및 한국 주식의 <strong>심볼(ticker)</strong>을 검색해서 가상으로 매매해보세요. 
-            한국 주식은 코스피는 <strong>.KS</strong>, 코스닥은 <strong>.KQ</strong>를 붙여주세요.
+            Search for NASDAQ and Korean stock <strong>ticker symbols</strong> and try virtual trading.
+            For Korean stocks, add <strong>.KS</strong> for KOSPI and <strong>.KQ</strong> for KOSDAQ.
           </p>
         </div>
 
@@ -421,7 +421,7 @@ const VirtualTrading: React.FC = () => {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="심볼(ticker)만 검색 가능 (예: AAPL, 005930.KS, 123456.KQ)..."
+              placeholder="Only ticker symbols can be searched (e.g., AAPL, 005930.KS, 123456.KQ)..."
               className="w-full border-none focus:ring-0 text-sm md:text-base text-gray-900 placeholder-gray-400"
             />
           </div>
@@ -535,7 +535,7 @@ const VirtualTrading: React.FC = () => {
                      {tradeType === 'BUY' ? 'Buy' : 'Sell'} {selectedStock.symbol}
                    </h2>
               <p className="text-sm text-gray-500">
-                현재가 {formatPrice(selectedStock.price, selectedStock.symbol)} · 보유 수량 {getOwnedQuantity(selectedStock.symbol)}
+                Current Price {formatPrice(selectedStock.price, selectedStock.symbol)} · Quantity Held {getOwnedQuantity(selectedStock.symbol)}
               </p>
                     </div>
             <div className="flex p-1 bg-gray-100 rounded-xl">
@@ -560,7 +560,7 @@ const VirtualTrading: React.FC = () => {
 
           <div>
                     <label className="block text-sm font-bold text-gray-700 mb-2">
-              수량 {tradeType === 'SELL' && `(최대: ${getOwnedQuantity(selectedStock.symbol)})`}
+              Quantity {tradeType === 'SELL' && `(최대: ${getOwnedQuantity(selectedStock.symbol)})`}
                     </label>
                     <input
                       type="number"
@@ -572,7 +572,7 @@ const VirtualTrading: React.FC = () => {
                   </div>
 
           <div className="flex justify-between py-3 border-t border-b border-gray-100 text-sm">
-            <span className="text-gray-500 font-medium">예상 거래금액</span>
+            <span className="text-gray-500 font-medium">Estimated Trade Amount</span>
                     <span className="font-extrabold text-gray-900 text-lg">
               {formatPrice(Number(quantity || 0) * selectedStock.price, selectedStock.symbol)}
                     </span>
@@ -588,7 +588,7 @@ const VirtualTrading: React.FC = () => {
             return insufficient && (
               <div className="mb-1 flex items-center gap-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm font-bold">
                        <AlertCircle size={18} />
-                {isKorean ? '원화 잔액이 부족합니다.' : '보유 현금이 부족합니다.'}
+                {isKorean ? 'Insufficient KRW balance.' : 'Insufficient cash balance.'}
                      </div>
             );
           })()}
@@ -596,7 +596,7 @@ const VirtualTrading: React.FC = () => {
                   {tradeType === 'SELL' && Number(quantity) > getOwnedQuantity(selectedStock.symbol) && (
             <div className="mb-1 flex items-center gap-2 text-red-600 bg-red-50 p-3 rounded-lg text-sm font-bold">
                         <AlertCircle size={18} />
-              보유 수량보다 많이 팔 수 없습니다.
+              You can’t sell more than you hold.
                       </div>
                   )}
 
@@ -636,7 +636,7 @@ const VirtualTrading: React.FC = () => {
               onClick={handleCloseTrade}
               className="px-4 py-3 rounded-xl border border-gray-200 text-sm font-bold text-gray-600 hover:bg-gray-50"
             >
-              취소
+              Cancel
             </button>
           </div>
         </div>
@@ -656,9 +656,9 @@ const VirtualTrading: React.FC = () => {
         <div className="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
           {/* Holdings */}
           <div className="p-4 md:p-6">
-            <h3 className="text-sm font-bold text-gray-700 mb-3">보유 종목</h3>
+            <h3 className="text-sm font-bold text-gray-700 mb-3">Holdings</h3>
             {portfolio.assets.length === 0 ? (
-              <p className="text-sm text-gray-400">아직 보유 중인 종목이 없습니다.</p>
+              <p className="text-sm text-gray-400">You don’t have any holdings yet.</p>
             ) : (
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 border-b border-gray-100">
@@ -706,9 +706,9 @@ const VirtualTrading: React.FC = () => {
 
           {/* Trade history */}
           <div className="p-4 md:p-6">
-            <h3 className="text-sm font-bold text-gray-700 mb-3">가상 매매 내역</h3>
+            <h3 className="text-sm font-bold text-gray-700 mb-3">Virtual Trading History</h3>
             {transactions.length === 0 ? (
-              <p className="text-sm text-gray-400">아직 실행된 주문이 없습니다.</p>
+              <p className="text-sm text-gray-400">You haven’t placed any orders yet.</p>
             ) : (
               <div className="max-h-64 overflow-y-auto custom-scrollbar">
                 <table className="w-full text-sm">
@@ -740,7 +740,7 @@ const VirtualTrading: React.FC = () => {
                       return (
                         <tr key={tx.id}>
                           <td className="py-2 px-2 text-xs text-gray-500">
-                            {new Date(tx.date).toLocaleString()}
+                            {new Date(tx.date).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short',timeZone: 'Asia/Seoul',})}
                           </td>
                           <td className="py-2 px-2">
                             <span
@@ -776,7 +776,7 @@ const VirtualTrading: React.FC = () => {
           <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl">
             <h2 className="text-xl font-extrabold text-gray-900 mb-4">Trade Executed</h2>
             <p className="text-sm text-gray-600 mb-4">
-              방금 실행한 가상 매매에 대해 간단히 기록해두면, 트레이딩 다이어리에서 다시 볼 수 있어요.
+              If you jot down a quick note about the virtual trade you just made, you can revisit it later in your trading diary.
             </p>
                     
                     <div className="space-y-4">
@@ -813,7 +813,7 @@ const VirtualTrading: React.FC = () => {
                             <textarea 
                                 className="w-full p-3 bg-blue-50 border-gray-200 rounded-xl text-gray-900 placeholder-gray-400 focus:ring-primary-500 focus:border-primary-500"
                                 rows={2}
-                  placeholder="예: 실적 기대감으로 단기 상승을 노렸음..."
+                  placeholder="Aimed for a short-term rise on earnings expectations..."
                                 value={reflectionData.note}
                   onChange={(e) => setReflectionData({ ...reflectionData, note: e.target.value })}
                             />
@@ -831,7 +831,7 @@ const VirtualTrading: React.FC = () => {
                   onClick={() => setShowReflection(false)}
                   className="px-4 py-3 rounded-xl border border-gray-200 text-sm font-bold text-gray-600 hover:bg-gray-50"
                 >
-                  건너뛰기
+                  Skip
                         </button>
                     </div>
                 </div>

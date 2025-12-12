@@ -135,5 +135,55 @@ def search_stocks():
     
     return jsonify({"results": results[:20]})  # 최대 20개 반환
 
+
+# yfinance_api.py
+# yfinance_api.py (예시)
+
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+import os
+
+from qwen_client import call_qwen_finsec_model, build_security_prompt
+
+app = Flask(__name__)
+# 프론트(3000) → 백엔드(5002) CORS 허용
+CORS(app, resources={r"/api/*": {"origins": "*"}})
+
+# 엘리스에서 받은 URL / API KEY
+MY_API_URL = "https://mlapi.run/0cd91e2f-6603-4699-b9d8-57c93f05b37e"
+MY_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NjUzMjc0NDQsIm5iZiI6MTc2NTMyNzQ0NCwiZXhwIjoxNzY1Mzc4Nzk5LCJrZXlfaWQiOiI5MWQ1N2UwMi03ODYxLTQ4YzQtODU1Ni1hMGVkYmIyNWQxNjIifQ.D-ybt57LKXBcckn2LgHXx6YI2g49UYI4f1vPAxZgpgk"
+
+@app.route("/api/security-chat", methods=["POST", "OPTIONS"])
+def security_chat():
+    """
+    보안모드용 Qwen-Finsec 프록시 엔드포인트
+    프론트에서 body:
+      { "history": [ { "role": "user"|"model", "content": "..." }, ... ] }
+    """
+    print(">>> /api/security-chat hit, method =", request.method)
+
+    # 브라우저 Preflight(OPTIONS) 대응
+    if request.method == "OPTIONS":
+        # Flask-CORS가 헤더는 달아주기 때문에 200만 돌려주면 됨
+        return "", 200
+
+    data = request.get_json(force=True) or {}
+    history = data.get("history", [])
+
+    if not history:
+        return jsonify({"error": "history is empty"}), 400
+
+    latest = history[-1]
+    user_message = latest.get("content", "")
+    prev_history = history[:-1]
+
+    prompt = build_security_prompt(prev_history, user_message)
+    print("[DEBUG] prompt head:", prompt[:200], "...")
+
+    answer = call_qwen_finsec_model(MY_API_URL, MY_API_KEY, prompt)
+    return jsonify({"answer": answer})
+
+
 if __name__ == "__main__":
-    app.run(port=5002)
+    # 기존에 yfinance용 다른 라우트들도 같이 app에 정의돼 있다고 가정
+    app.run(host="0.0.0.0", port=5002, debug=True)

@@ -206,7 +206,7 @@ const Diary: React.FC = () => {
                   )}
                 </div>
                 <span className="text-xs font-medium text-gray-400 whitespace-nowrap">
-                  {new Date(entry.date).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}
+                  {new Date(entry.date).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short', timeZone:'Asia/Seoul' })}
                 </span>
               </div>
               <p className="text-gray-800 whitespace-pre-wrap leading-relaxed mb-4">{entry.note}</p>
