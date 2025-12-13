@@ -113,8 +113,10 @@ const VirtualTrading: React.FC = () => {
     try {
       const results = await searchNasdaqStocks(q);
       if (results.length === 0) {
-        // API 한도 초과나 일시 오류일 수 있으므로, 이전 결과는 유지하고 메시지만 보여줌
-        setSearchError('지금은 외부 주가 API 한도/오류로 검색 결과를 가져오지 못했습니다. 잠시 후 다시 시도해 주세요.');
+        // 심볼 형식이 잘못됐거나, API 응답이 없을 때
+        setSearchError(
+          '검색 결과가 없습니다. 나스닥은 심볼(AAPL), 한국 주식은 6자리+시장코드 형식(예: 005930.KS, 035420.KQ)으로 입력해 주세요.'
+        );
       } else {
         setSearchResults(results);
         setSearchCache((prev) => ({ ...prev, [q]: results }));

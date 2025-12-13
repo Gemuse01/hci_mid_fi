@@ -66,6 +66,8 @@ export interface NewsItem {
   summary: string;
   impact: 'positive' | 'negative' | 'neutral';
   related_symbols: string[];
+  link?: string;
+  fullText?: string;
 }
 
 export interface AppState {
