@@ -41,6 +41,10 @@ How can I support your journey today?`,
   ]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSecurityMode, setIsSecurityMode] = useState(false);
+  const [surveyQuestions, setSurveyQuestions] = useState<string[] | null>(null);
+  const [surveyAnswers, setSurveyAnswers] = useState<string[]>(["", "", ""]);
+  const [isSubmittingSurvey, setIsSubmittingSurvey] = useState(false);
+  const [surveyPending, setSurveyPending] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -52,8 +56,111 @@ How can I support your journey today?`,
     scrollToBottom();
   }, [messages]);
 
+  // Extract 3 survey questions from numbered or bullet list
+  function extractThreeSurveyQuestions(text: string): string[] | null {
+    if (!text) return null;
+
+    // 1) 숫자형 설문 (1. / 2. / 3.)
+    const numberRe = /1\.?\s*(.+)\n\s*2\.?\s*(.+)\n\s*3\.?\s*(.+)/s;
+    const nm = text.match(numberRe);
+    if (nm) {
+      return [nm[1].trim(), nm[2].trim(), nm[3].trim()];
+    }
+
+    // 2) 불릿형 설문 (•, -, *, –)
+    const bulletLines = text
+      .split('\n')
+      .map(l => l.trim())
+      .filter(l => /^([•\-*–])\s+/.test(l))
+      .map(l => l.replace(/^([•\-*–])\s+/, '').trim());
+
+    if (bulletLines.length >= 3) {
+      return bulletLines.slice(0, 3);
+    }
+
+    return null;
+  }
+
   const handleSend = async (textInput: string) => {
     if (!textInput.trim() || isLoading) return;
+
+    // 설문 대기 중일 때: 설문 답변 입력 처리
+    if (surveyPending && surveyQuestions) {
+      // Parse exactly 3 answers from last 3 sentences
+      const sentences = textInput
+        .split(/[\.?!…。]+/)
+        .map(s => s.trim())
+        .filter(Boolean);
+      if (sentences.length >= 3) {
+        const parsed = sentences.slice(-3);
+        // Compose qa_pairs: [{ question, answer }]
+        const qa_pairs = surveyQuestions.slice(0, 3).map((q, idx) => ({
+          question: q,
+          answer: parsed[idx] || "",
+        }));
+        setIsSubmittingSurvey(true);
+        try {
+          const resp = await fetch('/api/persona/classify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              qa_pairs,
+              current_persona: user.persona,
+            }),
+          });
+          
+          if (!resp.ok) {
+            const errorData = await resp.json().catch(() => ({}));
+            throw new Error(errorData.error || `Server error: ${resp.status}`);
+          }
+          
+          const result = await resp.json();
+          if (result && typeof result.changed === 'boolean') {
+            if (result.changed) {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: (Date.now() + 2).toString(),
+                  role: 'model',
+                  text: `Your persona has been updated to **${result.label}** (${result.persona}).`,
+                  timestamp: new Date(),
+                },
+              ]);
+            } else {
+              setMessages((prev) => [
+                ...prev,
+                {
+                  id: (Date.now() + 2).toString(),
+                  role: 'model',
+                  text: `Your persona remains **${result.label}** (${result.persona}). Thank you for your responses!`,
+                  timestamp: new Date(),
+                },
+              ]);
+            }
+          } else if (result.error) {
+            throw new Error(result.error);
+          }
+        } catch (err) {
+          console.error('Persona classification error:', err);
+          const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: (Date.now() + 2).toString(),
+              role: 'model',
+              text: `Sorry, there was a problem updating your persona: ${errorMessage}. Please try again later.`,
+              timestamp: new Date(),
+            },
+          ]);
+        } finally {
+          setSurveyQuestions(null);
+          setSurveyAnswers(["", "", ""]);
+          setSurveyPending(false);
+          setIsSubmittingSurvey(false);
+        }
+        return; // block normal chat flow
+      }
+    }
 
     const userMsg: Message = {
       id: Date.now().toString(),
@@ -77,6 +184,15 @@ How can I support your journey today?`,
             text: m.text,
           })),
         );
+
+        // after receiving model response, detect a 3-item survey/checklist (numbered or bullet)
+        const questions = extractThreeSurveyQuestions(responseText);
+        if (questions) {
+          setSurveyQuestions(questions);
+          setSurveyPending(true); // ✅ 설문 대기 상태 ON
+        } else {
+          setSurveyQuestions(null);
+        }
 
         setMessages((prev) => [
           ...prev,
@@ -109,6 +225,25 @@ How can I support your journey today?`,
             timestamp: new Date(),
           },
         ]);
+
+        // after receiving model response, detect a 3-item survey/checklist (numbered or bullet)
+        const questions = extractThreeSurveyQuestions(responseText);
+        if (questions) {
+          setSurveyQuestions(questions);
+          setSurveyPending(true); // ✅ 설문 대기 상태 ON
+        } else {
+          setSurveyQuestions(null);
+        }
+
+        // 만약 서버가 페르소나 변경을 알리면 사용자에게 보여주기 위해 /api/check-persona-change 호출
+        try {
+          const surveyTrigger = /\b(survey|checklist|self-check)\b/i;
+          if (surveyTrigger.test(textInput)) {
+            // no-op for now; actual survey flow will call /api/update-persona after answers
+          }
+        } catch (e) {
+          console.warn('Persona check skipped', e);
+        }
       }
     } catch (error) {
       console.error('Chat error:', error);
@@ -126,6 +261,8 @@ How can I support your journey today?`,
       setIsLoading(false);
     }
   };
+
+  // Removed: handleSubmitSurvey and applySurveyAnswers (survey submission is now handled inline in handleSend)
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -147,7 +284,7 @@ How can I support your journey today?`,
         <div>
           <h1 className="text-2xl font-extrabold text-gray-900 flex items-center gap-3">
             <div className="bg-primary-100 p-2 rounded-xl">
-              <Bot className="text-primary-600" size={28} />
+        {/* Suggested Prompts (only show if few messages) */}
             </div>
             AI Financial Mentor
           </h1>

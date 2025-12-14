@@ -85,4 +85,5 @@ export interface AppContextType extends AppState {
   addDiaryEntry: (entry: Omit<DiaryEntry, 'id' | 'date'>) => string; // Return ID
   updateDiaryEntry: (id: string, updates: Partial<DiaryEntry>) => void;
   resetApp: () => void;
+  applySurveyAnswers?: (answers: string[]) => Promise<{ persona: string; label: string; changed: boolean }>;
 }
