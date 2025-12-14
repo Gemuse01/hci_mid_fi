@@ -3,6 +3,7 @@ import { GoogleGenerativeAI, type Content } from "@google/generative-ai";
 import type { UserProfile, Portfolio, DiaryEntry } from "../types";
 import { PERSONA_DETAILS } from "../constants";
 import { apiUrl } from "./apiClient";
+import { buildAgentPrompt } from "./knowledgeService";
 
 /**
  * NOTE
@@ -259,6 +260,36 @@ export const generateFinancialAdvice = async (
       .map((a) => `${a.quantity} shares of ${a.symbol} (Avg: $${a.avg_price.toFixed(2)})`)
       .join(", ") || "No current holdings";
 
+  // Extract the last user message from history
+  const lastUserMessage = (history || [])
+    .slice()
+    .reverse()
+    .find((msg) => msg.role === "user");
+  
+  const userQuery = lastUserMessage
+    ? (lastUserMessage.parts || [])
+        .map((p: any) => (typeof p?.text === "string" ? p.text : ""))
+        .filter(Boolean)
+        .join(" ")
+    : "";
+
+  // Build agent prompt with knowledge base retrieval (DB query happens here)
+  let knowledgePrompt = "";
+  let retrievedDocs: any[] = [];
+  
+  if (userQuery.trim()) {
+    try {
+      const { prompt, docs } = await buildAgentPrompt(userQuery, 6, 800);
+      knowledgePrompt = prompt;
+      retrievedDocs = docs;
+      console.log(`[generateFinancialAdvice] Retrieved ${docs.length} documents for query: "${userQuery}"`);
+    } catch (err) {
+      console.error("[generateFinancialAdvice] Error building agent prompt:", err);
+      // Fallback: use user query directly if knowledge service fails
+      knowledgePrompt = userQuery;
+    }
+  }
+
   // Flatten Gemini-style history into a simple chat transcript for the mlapi.run model.
   const conversation = (history || [])
     .map((msg) => {
@@ -288,6 +319,7 @@ Optional micro‑survey behaviour (only when it feels natural in the conversatio
 `
     : "";
 
+  // Combine the knowledge-enhanced prompt with the original FinGuide context
   const prompt = `
 You are FinGuide, an AI financial mentor for a paper-trading / practice environment.
 
@@ -308,7 +340,7 @@ ${surveyInstructions}
 Conversation so far:
 ${conversation}
 
-Now respond as FinGuide to the user's last message.
+${knowledgePrompt ? `\n\n${knowledgePrompt}` : "\n\nNow respond as FinGuide to the user's last message."}
 `.trim();
 
   try {
@@ -316,12 +348,12 @@ Now respond as FinGuide to the user's last message.
     const trimmed = (text || "").trim();
     if (!trimmed) {
       console.warn("[generateFinancialAdvice] Empty response from GPT, returning fallback.");
-      return "I don’t have a detailed answer right now, but remember this is a safe practice environment. Try asking about one concrete position, plan, or concern at a time so we can work through it together.";
+      return "I don't have a detailed answer right now, but remember this is a safe practice environment. Try asking about one concrete position, plan, or concern at a time so we can work through it together.";
     }
     return trimmed;
   } catch (err) {
     console.error("[generateFinancialAdvice] AI error, returning fallback:", err);
-    return "I’m having trouble generating a full answer right now. Nothing in this practice account is at risk, so feel free to rephrase your question or ask about a smaller, specific decision instead.";
+    return "I'm having trouble generating a full answer right now. Nothing in this practice account is at risk, so feel free to rephrase your question or ask about a smaller, specific decision instead.";
   }
 };
 
