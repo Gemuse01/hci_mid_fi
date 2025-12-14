@@ -1,8 +1,9 @@
 // services/stockService.ts
 import type { Stock } from "../types";
+import { apiUrl } from "./apiClient";
 
-// yfinance 백엔드 프록시 URL
-const YFINANCE_API_URL = "http://localhost:5002/api/quote";
+// yfinance backend proxy URL (quote endpoint)
+const YFINANCE_API_URL = apiUrl("/api/quote");
 
 // 여러 심볼의 실시간 시세 (yfinance 백엔드에 요청)
 export async function getYFinanceQuotes(symbols: string[]): Promise<Record<string, { price: number; change_pct: number }>> {
@@ -33,7 +34,7 @@ export async function searchNasdaqStocks(query: string): Promise<Stock[]> {
   if (!query.trim()) return [];
   
   try {
-    const res = await fetch(`http://localhost:5002/api/search?query=${encodeURIComponent(query.trim())}`);
+    const res = await fetch(apiUrl(`/api/search?query=${encodeURIComponent(query.trim())}`));
     if (!res.ok) {
       console.warn(`[yfinance] Search failed: ${res.status} ${res.statusText}`);
       return [];

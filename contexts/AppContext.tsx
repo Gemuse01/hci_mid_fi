@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { AppContextType, AppState, UserProfile, DiaryEntry, Transaction, MarketCondition, NewsItem } from '../types';
 import { DEFAULT_STATE } from '../constants';
 import { generateDashboardLearningCards, generateDashboardQuizzes } from '../services/geminiService';
+import { apiUrl } from '../services/apiClient';
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
@@ -75,7 +76,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         try {
           const storedNews = window.localStorage.getItem(LS_NEWS_KEY);
           if (!storedNews) {
-            const res = await fetch('http://localhost:5002/api/news');
+            const res = await fetch(apiUrl('/api/news'));
             if (res.ok) {
               const data: any = await res.json();
               const raw = Array.isArray(data?.news) ? data.news : [];

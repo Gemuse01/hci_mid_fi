@@ -1,4 +1,6 @@
 // services/securityService.ts
+import { apiUrl } from './apiClient';
+
 export interface SimpleMessage {
   role: 'user' | 'model';
   text: string;
@@ -12,7 +14,7 @@ export async function generateSecurityAdvice(
     content: m.text,
   }));
 
-  const res = await fetch('http://localhost:5002/api/security-chat', {
+  const res = await fetch(apiUrl('/api/security-chat'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ history: payloadHistory }),
