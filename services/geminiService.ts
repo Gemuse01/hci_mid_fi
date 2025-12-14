@@ -259,53 +259,169 @@ export const generateDiaryFeedback = async (
   user: UserProfile,
   recentTxs: any[] = [],
   recentDiaryLite: any[] = []
-): Promise<string> => {
+): Promise<any> => {
   const persona = PERSONA_DETAILS[user.persona];
 
   // Keep context small to reduce token usage (less likely to hit quota)
   const compactTxs = (recentTxs || []).slice(0, 12);
   const compactDiary = (recentDiaryLite || []).slice(0, 8);
 
+  // ✅ Diary.tsx 에서 "모달에 보이는 전체 내용"을 entryContext로 넘길 수 있으므로
+  //    (기존 DiaryEntry 형태 + 확장 필드) 모두 방어적으로 지원
+  const e: any = entry as any;
+
+  const emotion = String(e?.emotionLabel || e?.emotion || "").trim() || "N/A";
+  const driver = String(e?.primaryDriverLabel || e?.driverLabel || e?.reason || "").trim() || "N/A";
+  const ticker = String(e?.ticker || e?.related_symbol || e?.relatedSymbol || "").trim() || "N/A";
+
+  const whatIf = String(e?.whatIf ?? e?.what_if ?? "").trim();
+  const note = String(e?.note ?? "").trim();
+
+  const tradeType = String(e?.trade?.type ?? e?.trade_type ?? "").trim();
+  const tradePrice = Number.isFinite(e?.trade?.price)
+    ? e.trade.price
+    : Number.isFinite(e?.trade_price)
+      ? e.trade_price
+      : null;
+  const tradeQty = Number.isFinite(e?.trade?.quantity)
+    ? e.trade.quantity
+    : Number.isFinite(e?.trade_qty)
+      ? e.trade_qty
+      : null;
+
+  const recheckPct =
+    typeof e?.recheckTriggerPct === "number" && Number.isFinite(e?.recheckTriggerPct)
+      ? e.recheckTriggerPct
+      : typeof e?.recheck_pct === "number" && Number.isFinite(e?.recheck_pct)
+        ? e.recheck_pct
+        : null;
+
+  const currentPrice = Number.isFinite(e?.performance?.currentPrice) ? e.performance.currentPrice : null;
+  const movePct = Number.isFinite(e?.performance?.movePct) ? e.performance.movePct : null;
+  const plVal = Number.isFinite(e?.performance?.unrealizedPL?.value) ? e.performance.unrealizedPL.value : null;
+  const plCcy = String(e?.performance?.unrealizedPL?.currency || "").trim() || null;
+  const recheckNow = typeof e?.performance?.recheckNow === "boolean" ? e.performance.recheckNow : null;
+
+  const tsKST = String(e?.timestampKST || "").trim();
+
+  // ✅ JSON-only contract for Diary.tsx normalizeFeedbackToText
+  const schemaHint = `
+Return ONLY one JSON object (no markdown, no backticks, no extra text).
+Use these exact keys and types:
+{
+  "oneLineSummary": string,
+  "fact": string[],
+  "interpretation": string[],
+  "actionTaken": string[],
+  "missingPieces": string[],
+  "biasChecklist": {"name": string, "evidenceSpan": string}[],
+  "oneQuestion": string
+}
+
+Rules:
+- Write in Korean.
+- Keep each array to max 3 items.
+- "evidenceSpan" must be a short quote/snippet (max 60 chars) from the user's entry fields.
+- "missingPieces" should list what's missing among: 근거/리스크(WHAT IF)/재평가 조건/포지션 사이징/대안 시나리오.
+- If information is not available, keep arrays empty rather than inventing.
+- "oneQuestion" must be exactly 1 question, actionable, based on the user's entry.
+- ABSOLUTELY DO NOT wrap output in markdown code fences like \`\`\`json ... \`\`\`.
+- Output must start with { and end with }.
+`.trim();
+
   const basePrompt = `
 You are a practical trading coach speaking directly to the user.
-Write in a supportive, realistic tone. No price predictions. No buy/sell calls.
+Your job: turn this single diary entry (as shown in the UI) into:
+1) 요약, 2) 규칙·인지편향 체크, 3) 다음 기록 질문 1개.
 
-Style rules:
-- Use 2nd person ("you").
-- Exactly 4 sentences, under 90 words total.
-- No bullet points.
-- End the final sentence with a period.
+User persona: ${persona.label} (${persona.description})
+Tone: ${persona.advice}
 
-Context:
-Persona: ${persona.label}
-Emotion: ${entry.emotion}
-Driver: ${entry.reason}
-Ticker: ${entry.related_symbol || "N/A"}
-Note: "${(entry.note || "").slice(0, 800)}"
+Diary entry (UI fields):
+- Timestamp(KST): ${tsKST || "N/A"}
+- Emotion: ${emotion}
+- Driver: ${driver}
+- Ticker: ${ticker}
+- Trade: ${tradeType || "N/A"}${tradePrice !== null ? ` @ ${tradePrice}` : ""}${tradeQty !== null ? ` x ${tradeQty}` : ""}
+- WHAT IF: ${whatIf ? `"${whatIf.slice(0, 600)}"` : "N/A"}
+- PLAN (recheck %): ${recheckPct !== null ? String(recheckPct) : "N/A"}
+- Thoughts(note): "${note ? note.slice(0, 900) : ""}"
+
+Performance snapshot (if available):
+- Current price: ${currentPrice !== null ? String(currentPrice) : "N/A"}
+- Move% from entry: ${movePct !== null ? `${movePct.toFixed(2)}%` : "N/A"}
+- Unrealized P/L: ${plVal !== null ? `${plVal}${plCcy ? ` ${plCcy}` : ""}` : "N/A"}
+- RecheckNow triggered: ${recheckNow !== null ? String(recheckNow) : "N/A"}
+
 Recent transactions (latest first): ${JSON.stringify(compactTxs)}
 Recent diary patterns: ${JSON.stringify(compactDiary)}
+
+${schemaHint}
 `.trim();
+
+  // ✅ Small helper: strips ```json ... ``` fences if the model wraps output
+  const stripCodeFences = (text: string): string => {
+    const t = (text || "").trim();
+    if (!t) return "";
+
+    // ```json ... ```
+    const fenced = t.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    if (fenced?.[1]) return fenced[1].trim();
+
+    // Sometimes model returns leading ```json without closing properly; try soft removal
+    return t.replace(/^```(?:json)?/i, "").replace(/```$/i, "").trim();
+  };
+
+  const tryParseJson = (text: string): any | null => {
+    const cleaned = stripCodeFences(text);
+    if (!cleaned) return null;
+
+    // 1) direct parse
+    try {
+      return JSON.parse(cleaned);
+    } catch {}
+
+    // 2) extract the first {...} block
+    const m = cleaned.match(/\{[\s\S]*\}/);
+    if (m?.[0]) {
+      try {
+        return JSON.parse(m[0]);
+      } catch {}
+    }
+
+    return null;
+  };
 
   try {
     // ✅ maxRetries=1 (kept low to avoid quota burn)
-    let text = await generateWithRetry(basePrompt, { maxTokens: 220, temperature: 0.6, maxRetries: 1 });
+    let text = await generateWithRetry(basePrompt, { maxTokens: 420, temperature: 0.4, maxRetries: 1 });
 
-    // If looks cut off, ONE rewrite attempt (still maxRetries=1 inside)
-    if (looksCutOff(text, 70)) {
+    // First parse attempt
+    let parsed = tryParseJson(text);
+
+    // If not JSON, do ONE strict rewrite attempt
+    if (!parsed) {
       const rewritePrompt =
         basePrompt +
         `
 
-Your previous answer was cut off or too short.
-Rewrite fully as exactly 4 complete sentences, under 90 words, and end with a period.
+Your previous output was not valid JSON.
+Return ONLY the JSON object (no markdown, no backticks, no \`\`\` fences).
+Start with { and end with }.
 `.trim();
 
-      text = await generateWithRetry(rewritePrompt, { maxTokens: 240, temperature: 0.6, maxRetries: 1 });
+      text = await generateWithRetry(rewritePrompt, { maxTokens: 420, temperature: 0.2, maxRetries: 1 });
+      parsed = tryParseJson(text);
     }
 
-    const out = (text || "").trim();
-    if (!out) throw new Error("Empty model response.");
-    return out;
+    // If still not JSON, fall back to raw text (Diary.tsx normalize will still display safely)
+    if (!parsed) {
+      const out = (text || "").trim();
+      if (!out) throw new Error("Empty model response.");
+      return out;
+    }
+
+    return parsed;
   } catch (err) {
     // IMPORTANT: Throw so Diary.tsx can stop spinner in finally (no infinite loading)
     throw toUserFacingError(err);
@@ -313,7 +429,7 @@ Rewrite fully as exactly 4 complete sentences, under 90 words, and end with a pe
 };
 
 /* -----------------------------
- * Dashboard: 5‑minute learning & quizzes
+ * Dashboard: 5-minute learning & quizzes
  * ----------------------------- */
 
 export type LearningCard = {

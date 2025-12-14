@@ -1,8 +1,7 @@
 // Diary.tsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useApp } from "../contexts/AppContext";
 import { EMOTION_OPTIONS, REASON_OPTIONS } from "../constants";
-import { generateDiaryFeedback } from "../services/geminiService";
 import { getYFinanceQuotes } from "../services/stockService";
 import {
   BookHeart,
@@ -14,16 +13,18 @@ import {
   Newspaper,
   MessageCircle,
   Zap,
-  Sparkles,
-  Loader2,
   Filter,
   Tag,
   TrendingUp,
   TrendingDown,
   AlertTriangle,
+  Target,
+  Percent,
 } from "lucide-react";
 
 const QUOTE_CACHE_KEY = "finguide_live_quotes_v1";
+const TIMEZONE = "Asia/Seoul";
+const WEEKLY_GOAL = 5; // ✅ 주간 목표(원하면 바꾸기)
 
 function isKoreanStock(symbol: string) {
   return symbol.endsWith(".KS") || symbol.endsWith(".KQ");
@@ -44,18 +45,6 @@ function formatPrice(price: number, symbol: string) {
   return `$${price.toLocaleString(undefined, { maximumFractionDigits: 2 })}`;
 }
 
-function parseRetrySeconds(msg: string): number | null {
-  const m1 = msg.match(/retry in\s+(\d+)s/i);
-  if (m1?.[1]) return Number(m1[1]);
-
-  const m2 = msg.match(/retry in\s+([0-9.]+)s/i);
-  if (m2?.[1]) {
-    const sec = Number(m2[1]);
-    if (Number.isFinite(sec) && sec > 0) return Math.ceil(sec);
-  }
-  return null;
-}
-
 function formatRecheckLabel(recheckPct?: number) {
   if (typeof recheckPct !== "number" || !Number.isFinite(recheckPct)) return "";
   const sign = recheckPct > 0 ? "+" : "";
@@ -66,7 +55,7 @@ function getEmotionLabel(val: string) {
   return EMOTION_OPTIONS.find((o: any) => o.value === val)?.label || val;
 }
 function getReasonLabel(val: string) {
-  return REASON_OPTIONS.find((o: any) => o.value === val)?.label || val;
+  return EMOTION_OPTIONS.find((o: any) => o.value === val)?.label || val;
 }
 function getEmotionColor(val: string) {
   return EMOTION_OPTIONS.find((o: any) => o.value === val)?.color || "bg-gray-100 text-gray-800";
@@ -107,7 +96,6 @@ const Tooltip: React.FC<{
   text: string;
   children: React.ReactNode;
   side?: "top" | "bottom";
-  /** ✅ inputs/textarea 같은 "w-full" 요소 감쌀 때: "block w-full" 넣어주면 좌측 쏠림 방지 */
   wrapperClassName?: string;
 }> = ({ text, children, side = "top", wrapperClassName = "" }) => {
   const pos =
@@ -145,83 +133,57 @@ const ChipGroup: React.FC<{ children: React.ReactNode; className?: string }> = (
   );
 };
 
-/**
- * Normalize model output into a single display string:
- * 1) 요약
- * 2) 규칙·인지편향 체크
- * 3) 다음 기록 질문 1개
- */
-function normalizeFeedbackToText(raw: any): string {
-  if (!raw) return "";
+/* -----------------------------
+ * Date helpers (KST-safe keys)
+ * ----------------------------- */
+function kstDateKey(input: Date | string | number): string {
+  const d = typeof input === "string" || typeof input === "number" ? new Date(input) : input;
+  return d.toLocaleDateString("en-CA", { timeZone: TIMEZONE }); // YYYY-MM-DD
+}
+function kstMonthKey(input: Date | string | number): string {
+  return kstDateKey(input).slice(0, 7); // YYYY-MM
+}
 
-  if (typeof raw === "string") {
-    const trimmed = raw.trim();
+function weekdayShortKST(input: Date | string | number): string {
+  const d = typeof input === "string" || typeof input === "number" ? new Date(input) : input;
+  return new Intl.DateTimeFormat("en-US", { timeZone: TIMEZONE, weekday: "short" }).format(d);
+}
+function weekdayNumFromShort(short: string): number {
+  const map: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return map[short] ?? 0;
+}
 
-    if ((trimmed.startsWith("{") && trimmed.endsWith("}")) || (trimmed.startsWith("[") && trimmed.endsWith("]"))) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        return normalizeFeedbackToText(parsed);
-      } catch {
-        // fallthrough
-      }
-    }
+function dateFromKstKey(key: string): Date {
+  return new Date(`${key}T00:00:00+09:00`);
+}
+function addDaysToKstKey(key: string, deltaDays: number): string {
+  const base = dateFromKstKey(key).getTime();
+  const next = new Date(base + deltaDays * 24 * 60 * 60 * 1000);
+  return kstDateKey(next);
+}
 
-    return [
-      "요약",
-      trimmed,
-      "",
-      "규칙·인지편향 체크",
-      "- (체크 결과를 구조화하지 못했어요) 위 내용을 보고, ‘근거/리스크/재평가 조건’이 빠졌는지 점검해보세요.",
-      "",
-      "다음 기록 질문(1개)",
-      "이번 결정에서 가장 약한 가정 1개는 무엇이었나요?",
-    ].join("\n");
-  }
+function isRecheckNow(movePct?: number, recheckPct?: number) {
+  if (typeof movePct !== "number" || !Number.isFinite(movePct)) return false;
+  if (typeof recheckPct !== "number" || !Number.isFinite(recheckPct)) return false;
+  return recheckPct < 0 ? movePct <= recheckPct : movePct >= recheckPct;
+}
 
-  const obj = raw as any;
+/** Match key: KST day + type + symbol + qty + price */
+function makeTradeKeyKSTDay(params: { date: string | number | Date; type?: string; symbol?: string; quantity?: number; price?: number }) {
+  const day = kstDateKey(params.date);
+  const type = String(params.type || "").toUpperCase();
+  const symbol = String(params.symbol || "").toUpperCase();
+  const qty = Number(params.quantity);
+  const price = Number(params.price);
 
-  const oneLine = obj.oneLineSummary || obj.summary || obj.one_line_summary || obj.oneLine || "";
+  const qtyKey = Number.isFinite(qty) ? String(qty) : "";
+  const priceKey = Number.isFinite(price) ? String(price) : "";
 
-  const factArr: string[] = Array.isArray(obj.fact) ? obj.fact : [];
-  const interpArr: string[] = Array.isArray(obj.interpretation) ? obj.interpretation : [];
-  const actionArr: string[] = Array.isArray(obj.actionTaken) ? obj.actionTaken : [];
-
-  const missingPieces: string[] = Array.isArray(obj.missingPieces) ? obj.missingPieces : [];
-
-  const biasChecklist: Array<{ name?: string; evidenceSpan?: string }> = Array.isArray(obj.biasChecklist)
-    ? obj.biasChecklist
-    : [];
-
-  const question: string =
-    obj.oneQuestion || obj.nextQuestion || obj.one_question || "이번 결정에서 가장 약한 가정 1개는 무엇이었나요?";
-
-  const summaryLines: string[] = [];
-  if (oneLine) summaryLines.push(`- ${oneLine}`);
-  if (factArr.length) summaryLines.push(`- 사실(FACT): ${factArr.join(" / ")}`);
-  if (interpArr.length) summaryLines.push(`- 해석(INTERP): ${interpArr.join(" / ")}`);
-  if (actionArr.length) summaryLines.push(`- 행동(ACTION): ${actionArr.join(" / ")}`);
-
-  if (!summaryLines.length) {
-    summaryLines.push("- (요약을 생성하지 못했어요) 그래도 아래 체크를 참고해 복기해보세요.");
-  }
-
-  const checkLines: string[] = [];
-  if (missingPieces.length) checkLines.push(...missingPieces.map((m) => `- (규칙 누락) ${m}`));
-  if (biasChecklist.length) {
-    for (const b of biasChecklist.slice(0, 5)) {
-      const nm = b?.name ? String(b.name) : "인지편향 가능성";
-      checkLines.push(`- (인지편향) ${nm}`);
-    }
-  }
-  if (!checkLines.length) {
-    checkLines.push("- 큰 누락은 없어 보여요. 그래도 ‘틀렸을 때 시나리오’와 ‘재평가 조건’이 구체적인지 확인해보세요.");
-  }
-
-  return ["요약", ...summaryLines, "", "규칙·인지편향 체크", ...checkLines, "", "다음 기록 질문(1개)", `- ${question}`].join("\n");
+  return `${day}|${type}|${symbol}|${qtyKey}|${priceKey}`;
 }
 
 const Diary: React.FC = () => {
-  const { user, diary, transactions, updateDiaryEntry } = useApp() as any;
+  const { diary, transactions } = useApp() as any;
 
   // -----------------------------
   // Quotes (current price on cards)
@@ -273,95 +235,6 @@ const Diary: React.FC = () => {
   }, [diarySymbols]);
 
   // -----------------------------
-  // AI feedback on-demand (no infinite loading)
-  // -----------------------------
-  const [insightLoadingId, setInsightLoadingId] = useState<string | null>(null);
-  const [disabledUntil, setDisabledUntil] = useState<Record<string, number>>({});
-  const [entryError, setEntryError] = useState<Record<string, string>>({});
-  const insightLockRef = useRef(false);
-
-  const isCooldown = (id: string) => (disabledUntil[id] ?? 0) > Date.now();
-  const cooldownLeft = (id: string) => Math.max(0, Math.ceil(((disabledUntil[id] ?? 0) - Date.now()) / 1000));
-
-  const requestFeedback = async (entry: any) => {
-    if (!entry?.id) return;
-
-    if (insightLoadingId) return;
-    if (insightLockRef.current) return;
-
-    const until = disabledUntil[entry.id] ?? 0;
-    if (until > Date.now()) return;
-
-    setEntryError((prev) => ({ ...prev, [entry.id]: "" }));
-
-    insightLockRef.current = true;
-    setInsightLoadingId(entry.id);
-
-    try {
-      const recentTxs = (transactions ?? [])
-        .slice()
-        .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
-        .slice(0, 20)
-        .map((tx: any) => ({
-          date: tx.date,
-          type: tx.type,
-          symbol: tx.symbol,
-          quantity: tx.quantity,
-          price: tx.price,
-        }));
-
-      const recentDiaryLite = (diary ?? [])
-        .slice()
-        .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
-        .slice(0, 10)
-        .map((d: any) => ({
-          date: d.date,
-          emotion: d.emotion,
-          reason: d.reason,
-          related_symbol: d.related_symbol,
-          what_if: d.what_if,
-          recheck_pct: d.recheck_pct,
-          trade_type: d.trade_type,
-          trade_qty: d.trade_qty,
-          trade_price: d.trade_price,
-          note: (d.note || "").slice(0, 200),
-        }));
-
-      const rawFeedback = await generateDiaryFeedback(entry, user, recentTxs, recentDiaryLite);
-      const normalized = normalizeFeedbackToText(rawFeedback);
-
-      updateDiaryEntry(entry.id, { aiFeedback: normalized });
-    } catch (err: any) {
-      const msg = String(err?.message || err);
-
-      if (msg.includes("429")) {
-        const sec = parseRetrySeconds(msg) ?? 60;
-
-        setDisabledUntil((prev) => ({
-          ...prev,
-          [entry.id]: Date.now() + sec * 1000,
-        }));
-
-        setEntryError((prev) => ({
-          ...prev,
-          [entry.id]: `You've reached the AI limit. Try again in ${sec}s.`,
-        }));
-
-        return;
-      }
-
-      setEntryError((prev) => ({
-        ...prev,
-        [entry.id]: "AI is unavailable right now. Please try again.",
-      }));
-      console.error("[Diary] AI feedback error:", err);
-    } finally {
-      setInsightLoadingId(null);
-      insightLockRef.current = false;
-    }
-  };
-
-  // -----------------------------
   // Sorting + Ticker filter
   // -----------------------------
   const [selectedTicker, setSelectedTicker] = useState<string>("ALL");
@@ -376,10 +249,19 @@ const Diary: React.FC = () => {
   }, [diary]);
 
   const sortedDiary = useMemo(() => {
-    return (diary ?? [])
-      .slice()
-      .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    return (diary ?? []).slice().sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [diary]);
+
+  // ✅ 티커별 "가장 최근" 일기 id (Recheck 태그는 여기만 노출)
+  const latestEntryIdByTicker = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const d of sortedDiary) {
+      const symbol = String(d?.related_symbol || "").trim().toUpperCase();
+      if (!symbol) continue;
+      if (!map[symbol]) map[symbol] = d.id; // sortedDiary는 최신순이므로 첫 등장 = 최신
+    }
+    return map;
+  }, [sortedDiary]);
 
   const filteredDiary = useMemo(() => {
     if (selectedTicker === "ALL") return sortedDiary;
@@ -399,7 +281,7 @@ const Diary: React.FC = () => {
   const closeViewModal = () => setViewingId(null);
 
   // -----------------------------
-  // Helpers: current price + pnl chips
+  // Helpers: current price + move%
   // -----------------------------
   function getCurrentPrice(symbol: string, fallback?: number) {
     const live = livePrices[symbol];
@@ -414,31 +296,194 @@ const Diary: React.FC = () => {
     return ((current! - entryPrice!) / entryPrice!) * 100;
   }
 
-  function computePL(entry: any, current?: number) {
-    const qty = entry?.trade_qty;
-    const entryPrice = entry?.trade_price;
-    if (!Number.isFinite(current as number) || !Number.isFinite(qty) || !Number.isFinite(entryPrice)) return undefined;
-
-    const raw = (current! - entryPrice) * qty;
-    // If SELL, interpret as "you sold at entryPrice; if current below, that was good"
-    if (entry?.trade_type === "SELL") return -raw;
-    return raw;
+  function effectiveMovePct(entry: any, movePct?: number) {
+    if (typeof movePct !== "number" || !Number.isFinite(movePct)) return undefined;
+    if (entry?.trade_type === "SELL") return -movePct;
+    return movePct;
   }
 
-  function isRecheckNow(movePct?: number, recheckPct?: number) {
-    if (typeof movePct !== "number" || !Number.isFinite(movePct)) return false;
-    if (typeof recheckPct !== "number" || !Number.isFinite(recheckPct)) return false;
-    // e.g. -7 → trigger when movePct <= -7
-    // e.g. +5 → trigger when movePct >= +5
-    return recheckPct < 0 ? movePct <= recheckPct : movePct >= recheckPct;
-  }
+  // -----------------------------
+  // ✅ Weekly goal (kept)
+  // -----------------------------
+  const todayKey = useMemo(() => kstDateKey(Date.now()), []);
+  const dayCountMap = useMemo(() => {
+    const map = new Map<string, number>();
+    (diary ?? []).forEach((d: any) => {
+      const key = kstDateKey(d.date);
+      map.set(key, (map.get(key) ?? 0) + 1);
+    });
+    return map;
+  }, [diary]);
+
+  const weeklyProgress = useMemo(() => {
+    const weekday = weekdayNumFromShort(weekdayShortKST(Date.now()));
+    const offsetToMon = (weekday + 6) % 7;
+    const weekStartKey = addDaysToKstKey(todayKey, -offsetToMon);
+    const weekEndKeyExclusive = addDaysToKstKey(weekStartKey, 7);
+
+    let count = 0;
+    for (const [k, v] of dayCountMap.entries()) {
+      if (k >= weekStartKey && k < weekEndKeyExclusive) count += v;
+    }
+
+    const pct = Math.max(0, Math.min(100, Math.round((count / WEEKLY_GOAL) * 100)));
+
+    return { weekStartKey, count, pct };
+  }, [dayCountMap, todayKey]);
+
+  // -----------------------------
+  // ✅ Trade → Diary coverage (%)
+  // -----------------------------
+  const tradeDiaryCoverage = useMemo(() => {
+    const txs = Array.isArray(transactions) ? transactions : [];
+    const entries = Array.isArray(diary) ? diary : [];
+
+    const txKeys: string[] = txs
+      .map((t: any) =>
+        makeTradeKeyKSTDay({
+          date: t.date,
+          type: t.type,
+          symbol: t.symbol,
+          quantity: t.quantity,
+          price: t.price,
+        })
+      )
+      .filter((k) => k.split("|").every((p) => p !== ""));
+
+    const diaryKeys = new Set(
+      entries
+        .map((d: any) =>
+          makeTradeKeyKSTDay({
+            date: d.date,
+            type: d.trade_type,
+            symbol: d.related_symbol,
+            quantity: d.trade_qty,
+            price: d.trade_price,
+          })
+        )
+        .filter((k) => k.split("|").every((p) => p !== ""))
+    );
+
+    let covered = 0;
+    for (const k of txKeys) if (diaryKeys.has(k)) covered += 1;
+
+    const total = txKeys.length;
+    const pct = total ? Math.round((covered / total) * 100) : 0;
+
+    const months: string[] = [];
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now);
+      d.setMonth(d.getMonth() - i);
+      months.push(kstMonthKey(d));
+    }
+
+    const txByMonth = new Map<string, string[]>();
+    for (const t of txs) {
+      const mk = kstMonthKey(t.date);
+      const key = makeTradeKeyKSTDay({
+        date: t.date,
+        type: t.type,
+        symbol: t.symbol,
+        quantity: t.quantity,
+        price: t.price,
+      });
+      if (!txByMonth.has(mk)) txByMonth.set(mk, []);
+      txByMonth.get(mk)!.push(key);
+    }
+
+    const monthly = months.map((m) => {
+      const list = txByMonth.get(m) ?? [];
+      let cov = 0;
+      for (const k of list) if (diaryKeys.has(k)) cov += 1;
+      const tot = list.length;
+      const p = tot ? Math.round((cov / tot) * 100) : 0;
+      return { month: m, covered: cov, total: tot, pct: p };
+    });
+
+    return { covered, total, pct, monthly };
+  }, [transactions, diary]);
+
+  // -----------------------------
+  // ✅ Stats reward: emotion/driver win-rate + avg move%
+  // -----------------------------
+  type GroupStat = { key: string; label: string; n: number; win: number; avgMove: number };
+
+  const performanceStats = useMemo(() => {
+    const entries = (diary ?? []).filter((e: any) => e?.trade_price && e?.related_symbol);
+
+    const byEmotion = new Map<string, { n: number; win: number; sumMove: number }>();
+    const byDriver = new Map<string, { n: number; win: number; sumMove: number }>();
+    const byCombo = new Map<string, { n: number; win: number; sumMove: number; emo: string; drv: string }>();
+
+    for (const entry of entries) {
+      const symbol = String(entry.related_symbol || "").toUpperCase();
+      const current = symbol ? getCurrentPrice(symbol, entry?.trade_price) : undefined;
+
+      const move = computeMovePct(current, entry?.trade_price);
+      const eff = effectiveMovePct(entry, move);
+      if (typeof eff !== "number" || !Number.isFinite(eff)) continue;
+
+      const emo = String(entry.emotion || "unknown");
+      const drv = String(entry.reason || "unknown");
+      const comboKey = `${emo}__${drv}`;
+
+      const win = eff > 0 ? 1 : 0;
+
+      const a = byEmotion.get(emo) ?? { n: 0, win: 0, sumMove: 0 };
+      a.n += 1;
+      a.win += win;
+      a.sumMove += eff;
+      byEmotion.set(emo, a);
+
+      const b = byDriver.get(drv) ?? { n: 0, win: 0, sumMove: 0 };
+      b.n += 1;
+      b.win += win;
+      b.sumMove += eff;
+      byDriver.set(drv, b);
+
+      const c = byCombo.get(comboKey) ?? { n: 0, win: 0, sumMove: 0, emo, drv };
+      c.n += 1;
+      c.win += win;
+      c.sumMove += eff;
+      byCombo.set(comboKey, c);
+    }
+
+    const toList = (m: Map<string, { n: number; win: number; sumMove: number }>, kind: "emotion" | "driver"): GroupStat[] => {
+      const out: GroupStat[] = [];
+      for (const [k, v] of m.entries()) {
+        const label = kind === "emotion" ? getEmotionLabel(k) : getReasonLabel(k);
+        out.push({ key: k, label, n: v.n, win: v.win, avgMove: v.n ? v.sumMove / v.n : 0 });
+      }
+      return out.sort((x, y) => y.n - x.n);
+    };
+
+    const emotionList = toList(byEmotion, "emotion");
+    const driverList = toList(byDriver, "driver");
+
+    let worst: null | { emo: string; drv: string; n: number; winRate: number; avgMove: number } = null;
+    for (const v of byCombo.values()) {
+      if (v.n < 2) continue;
+      const avgMove = v.sumMove / v.n;
+      if (!worst || avgMove < worst.avgMove) {
+        worst = { emo: v.emo, drv: v.drv, n: v.n, winRate: v.n ? v.win / v.n : 0, avgMove };
+      }
+    }
+
+    return {
+      emotionList,
+      driverList,
+      worstCombo: worst,
+      sampleN: emotionList.reduce((acc, x) => acc + x.n, 0),
+    };
+  }, [diary, livePrices]);
 
   // -----------------------------
   // UI
   // -----------------------------
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-6">
-      {/* Header (New Entry 버튼 제거) */}
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3">
         <div>
           <h1 className="text-2xl font-extrabold text-gray-900 flex items-center gap-2">
@@ -449,7 +494,187 @@ const Diary: React.FC = () => {
         </div>
       </div>
 
-      {/* Filter row */}
+      {/* ✅ 1행: Diary Coverage (L) + Weekly Goal (R) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Diary Coverage */}
+        <div className="bg-white border border-gray-200 rounded-2xl p-4">
+          <div className="flex items-center gap-2">
+            <div className="p-2 bg-gray-50 rounded-full border border-gray-200">
+              <Percent size={16} className="text-gray-700" />
+            </div>
+            <div>
+              <div className="text-sm font-extrabold text-gray-900">Diary Coverage</div>
+              <div className="text-xs font-semibold text-gray-500">trades that have a diary entry</div>
+            </div>
+          </div>
+
+          <div className="mt-4 bg-gray-50 border border-gray-200 rounded-2xl p-4">
+            <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3">
+              <div>
+                <div className="text-xs font-extrabold text-gray-700">Overall</div>
+                <div className="mt-2 flex items-baseline gap-2">
+                  <div className="text-4xl font-extrabold text-gray-900">{tradeDiaryCoverage.pct}%</div>
+                  <div className="text-sm font-bold text-gray-600">coverage</div>
+                </div>
+                <div className="mt-1 text-xs font-semibold text-gray-500">
+                  {tradeDiaryCoverage.covered} / {tradeDiaryCoverage.total} trades
+                </div>
+              </div>
+
+              <div className="w-full sm:w-[240px]">
+                <div className="text-xs font-semibold text-gray-500 mb-1 text-right">progress</div>
+                <div className="w-full h-2.5 rounded-full bg-white border border-gray-200 overflow-hidden">
+                  <div className="h-full bg-emerald-500" style={{ width: `${tradeDiaryCoverage.pct}%` }} />
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5">
+              <div className="text-xs font-extrabold text-gray-700 mb-2">Last 6 months</div>
+              <div className="space-y-2">
+                {tradeDiaryCoverage.monthly.map((m) => (
+                  <Tooltip key={m.month} text={`${m.month} · ${m.covered}/${m.total} trades (${m.pct}%)`} side="top">
+                    <div className="flex items-center gap-2">
+                      <div className="w-14 text-[11px] font-bold text-gray-600 tabular-nums">{m.month}</div>
+                      <div className="flex-1 h-2 rounded-full bg-white border border-gray-200 overflow-hidden">
+                        <div className="h-full bg-emerald-400" style={{ width: `${m.pct}%` }} />
+                      </div>
+                      <div className="w-10 text-right text-[11px] font-extrabold text-gray-700 tabular-nums">{m.pct}%</div>
+                    </div>
+                  </Tooltip>
+                ))}
+              </div>
+
+              <div className="mt-3 text-[11px] font-semibold text-gray-500">
+                * 매칭 기준: (KST 날짜 + BUY/SELL + ticker + qty + price)
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Weekly Goal */}
+        <div className="bg-white border border-gray-200 rounded-2xl p-4">
+          <div className="flex items-center gap-2">
+            <div className="p-2 bg-gray-50 rounded-full border border-gray-200">
+              <Target size={16} className="text-gray-700" />
+            </div>
+            <div>
+              <div className="text-sm font-extrabold text-gray-900">Weekly goal</div>
+              <div className="text-xs font-semibold text-gray-500">this week</div>
+            </div>
+          </div>
+
+          <div className="mt-4 bg-gray-50 border border-gray-200 rounded-2xl p-4">
+            <div className="flex items-baseline justify-between">
+              <div className="text-sm font-extrabold text-gray-900">
+                {weeklyProgress.count}/{WEEKLY_GOAL} entries
+              </div>
+              <div className="text-xs font-semibold text-gray-500">since {weeklyProgress.weekStartKey}</div>
+            </div>
+
+            <div className="mt-3 w-full h-2.5 rounded-full bg-white border border-gray-200 overflow-hidden">
+              <div className="h-full bg-primary-500" style={{ width: `${weeklyProgress.pct}%` }} />
+            </div>
+
+            <div className="mt-2 text-xs font-semibold text-gray-500">
+              {weeklyProgress.pct >= 100 ? "Goal achieved 🎉" : "Small wins add up."}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ✅ Your patterns */}
+      <div className="bg-white border border-gray-200 rounded-2xl p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-sm font-extrabold text-gray-900">Your patterns</div>
+            <div className="text-xs font-semibold text-gray-500">
+              Win rate & Avg Move% (current price 기준) · sample {performanceStats.sampleN}
+            </div>
+          </div>
+        </div>
+
+        {performanceStats.sampleN === 0 ? (
+          <div className="text-sm text-gray-500">아직 통계를 만들 데이터가 부족해요. (trade_price + ticker가 있는 기록이 필요)</div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="border border-gray-200 rounded-2xl p-4">
+              <div className="text-xs font-extrabold text-gray-700 mb-3">By emotion</div>
+              <div className="space-y-2">
+                {performanceStats.emotionList.slice(0, 6).map((s) => {
+                  const winRate = s.n ? Math.round((s.win / s.n) * 100) : 0;
+                  return (
+                    <div key={s.key} className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-extrabold text-gray-900 truncate">{s.label}</div>
+                        <div className="text-[11px] font-semibold text-gray-500">{s.n} samples</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-sm font-extrabold text-gray-900">{winRate}%</div>
+                        <div className={`text-[11px] font-bold ${s.avgMove >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                          Avg {s.avgMove >= 0 ? "+" : ""}
+                          {s.avgMove.toFixed(2)}%
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="border border-gray-200 rounded-2xl p-4">
+              <div className="text-xs font-extrabold text-gray-700 mb-3">By driver</div>
+              <div className="space-y-2">
+                {performanceStats.driverList.slice(0, 6).map((s) => {
+                  const winRate = s.n ? Math.round((s.win / s.n) * 100) : 0;
+                  return (
+                    <div key={s.key} className="flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-sm font-extrabold text-gray-900 truncate">{s.label}</div>
+                        <div className="text-[11px] font-semibold text-gray-500">{s.n} samples</div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <div className="text-sm font-extrabold text-gray-900">{winRate}%</div>
+                        <div className={`text-[11px] font-bold ${s.avgMove >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                          Avg {s.avgMove >= 0 ? "+" : ""}
+                          {s.avgMove.toFixed(2)}%
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="sm:col-span-2 border border-gray-200 rounded-2xl p-4 bg-gray-50">
+              <div className="text-xs font-extrabold text-gray-700 mb-2">Pattern watch</div>
+              {performanceStats.worstCombo ? (
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-sm font-extrabold text-gray-900">
+                      "{getEmotionLabel(performanceStats.worstCombo.emo)}" + "{getReasonLabel(performanceStats.worstCombo.drv)}"
+                    </div>
+                    <div className="text-[11px] font-semibold text-gray-500">
+                      {performanceStats.worstCombo.n} samples · Win rate {Math.round(performanceStats.worstCombo.winRate * 100)}%
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className={`text-sm font-extrabold ${performanceStats.worstCombo.avgMove >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                      Avg {performanceStats.worstCombo.avgMove >= 0 ? "+" : ""}
+                      {performanceStats.worstCombo.avgMove.toFixed(2)}%
+                    </div>
+                    <div className="text-[11px] font-semibold text-gray-500">(이 조합이 반복되면 “규칙/사전조건”을 더 강하게 적어두는 게 좋아요)</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-sm text-gray-500">아직 “조합 패턴”을 만들 데이터가 부족해요. (같은 감정+driver가 2개 이상)</div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* ✅ Filter */}
       {tickerOptions.length > 1 && (
         <div className="bg-white border border-gray-200 rounded-2xl p-4 flex flex-col sm:flex-row gap-3 sm:items-center sm:justify-between">
           <div className="flex items-center gap-2">
@@ -479,7 +704,7 @@ const Diary: React.FC = () => {
         </div>
       )}
 
-      {/* List */}
+      {/* ✅ List */}
       <div className="space-y-4">
         {filteredDiary.length === 0 ? (
           <div className="text-center py-16 bg-white rounded-3xl border-2 border-gray-100 border-dashed flex flex-col items-center">
@@ -504,10 +729,13 @@ const Diary: React.FC = () => {
             const qty = entry?.trade_qty;
 
             const movePct = computeMovePct(current, entryPrice);
-            const pl = computePL(entry, current);
 
             const recheckText = formatRecheckLabel(entry?.recheck_pct);
             const recheckNow = isRecheckNow(movePct, entry?.recheck_pct);
+
+            // ✅ 티커별 "최신 일기"에만 Recheck 관련 태그 노출
+            const isLatestForTicker = !!symbol && latestEntryIdByTicker[symbol] === entry.id;
+            const showRecheckTags = isLatestForTicker && (recheckNow || recheckText);
 
             return (
               <button
@@ -517,15 +745,11 @@ const Diary: React.FC = () => {
                 className="w-full text-left bg-white p-5 rounded-2xl shadow-sm border border-gray-200 hover:shadow-md hover:border-gray-300 transition-all"
               >
                 <div className="flex items-start justify-between gap-3">
-                  {/* ✅ Grouped chips (Trade / Plan / Performance) */}
                   <div className="min-w-0 flex-1 flex flex-wrap gap-2">
                     {/* TRADE */}
                     <ChipGroup>
                       <Tooltip text="Emotion selected when you wrote this entry">
-                        <span
-                          tabIndex={0}
-                          className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 ${getEmotionColor(entry.emotion)}`}
-                        >
+                        <span tabIndex={0} className={`px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1.5 ${getEmotionColor(entry.emotion)}`}>
                           {getEmotionIcon(entry.emotion)}
                           {getEmotionLabel(entry.emotion).split(" ")[1] || getEmotionLabel(entry.emotion)}
                         </span>
@@ -560,10 +784,7 @@ const Diary: React.FC = () => {
 
                       {Number.isFinite(entryPrice) && symbol && (
                         <Tooltip text="Executed price at the time of trade">
-                          <span
-                            tabIndex={0}
-                            className="px-2.5 py-1 bg-gray-50 text-gray-700 rounded-lg text-xs font-bold border border-gray-200"
-                          >
+                          <span tabIndex={0} className="px-2.5 py-1 bg-gray-50 text-gray-700 rounded-lg text-xs font-bold border border-gray-200">
                             Entry {formatPrice(entryPrice, symbol)}
                           </span>
                         </Tooltip>
@@ -571,18 +792,15 @@ const Diary: React.FC = () => {
 
                       {Number.isFinite(qty) && (
                         <Tooltip text="Executed quantity at the time of trade">
-                          <span
-                            tabIndex={0}
-                            className="px-2.5 py-1 bg-gray-50 text-gray-700 rounded-lg text-xs font-bold border border-gray-200"
-                          >
+                          <span tabIndex={0} className="px-2.5 py-1 bg-gray-50 text-gray-700 rounded-lg text-xs font-bold border border-gray-200">
                             Qty {qty}
                           </span>
                         </Tooltip>
                       )}
                     </ChipGroup>
 
-                    {/* PLAN */}
-                    {(recheckNow || recheckText) && (
+                    {/* PLAN (✅ 최신 티커 엔트리만 노출) */}
+                    {showRecheckTags && (
                       <ChipGroup>
                         {recheckNow && (
                           <Tooltip text="Current move% meets your recheck trigger — review your thesis now.">
@@ -598,10 +816,7 @@ const Diary: React.FC = () => {
 
                         {recheckText && (
                           <Tooltip text="Recheck trigger threshold">
-                            <span
-                              tabIndex={0}
-                              className="px-2.5 py-1 bg-amber-50 text-amber-800 rounded-lg text-xs font-bold border border-amber-100"
-                            >
+                            <span tabIndex={0} className="px-2.5 py-1 bg-amber-50 text-amber-800 rounded-lg text-xs font-bold border border-amber-100">
                               {recheckText}
                             </span>
                           </Tooltip>
@@ -610,36 +825,27 @@ const Diary: React.FC = () => {
                     )}
 
                     {/* PERFORMANCE */}
-                    {(Number.isFinite(current as number) ||
-                      (Number.isFinite(movePct as number) && Number.isFinite(pl as number))) && (
+                    {Number.isFinite(current as number) && symbol && (
                       <ChipGroup>
-                        {Number.isFinite(current as number) && symbol && (
-                          <Tooltip text="Current live price (polled/cached)">
-                            <span
-                              tabIndex={0}
-                              className="px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold border border-indigo-100"
-                            >
-                              Now {formatPrice(current!, symbol)}
-                            </span>
-                          </Tooltip>
-                        )}
+                        <Tooltip text="Current live price (polled/cached)">
+                          <span tabIndex={0} className="px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-lg text-xs font-bold border border-indigo-100">
+                            Now {formatPrice(current!, symbol)}
+                          </span>
+                        </Tooltip>
 
-                        {Number.isFinite(movePct as number) && Number.isFinite(pl as number) && symbol && (
-                          <Tooltip text="Move% from entry and unrealized P/L.">
+                        {Number.isFinite(movePct as number) && (
+                          <Tooltip text="Move% from entry (current price 기준)">
                             <span
                               tabIndex={0}
                               className={`px-2.5 py-1 rounded-lg text-xs font-extrabold flex items-center gap-1.5 ${
-                                (pl as number) >= 0
+                                (effectiveMovePct(entry, movePct) ?? 0) >= 0
                                   ? "bg-green-50 text-green-700 border border-green-100"
                                   : "bg-red-50 text-red-700 border border-red-100"
                               }`}
                             >
-                              {(movePct as number) >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-                              Move {(movePct as number) >= 0 ? "+" : ""}
-                              {(movePct as number).toFixed(2)}% · P/L {(pl as number) >= 0 ? "+" : ""}
-                              {isKoreanStock(symbol)
-                                ? `₩${Math.round(pl as number).toLocaleString()}`
-                                : `$${(pl as number).toLocaleString(undefined, { maximumFractionDigits: 2 })}`}
+                              {(effectiveMovePct(entry, movePct) ?? 0) >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+                              Move {(effectiveMovePct(entry, movePct) ?? 0) >= 0 ? "+" : ""}
+                              {(effectiveMovePct(entry, movePct) ?? 0).toFixed(2)}%
                             </span>
                           </Tooltip>
                         )}
@@ -653,7 +859,7 @@ const Diary: React.FC = () => {
                       {new Date(entry.date).toLocaleString("en-US", {
                         dateStyle: "medium",
                         timeStyle: "short",
-                        timeZone: "Asia/Seoul",
+                        timeZone: TIMEZONE,
                       })}
                     </span>
                   </Tooltip>
@@ -664,7 +870,7 @@ const Diary: React.FC = () => {
         )}
       </div>
 
-      {/* View entry modal */}
+      {/* View entry modal (AI 버튼 없음 유지) */}
       {viewingEntry && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
           <div className="flex items-end sm:items-center justify-center min-h-full p-4 text-center sm:p-0">
@@ -723,7 +929,7 @@ const Diary: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Trade snapshot chips inside modal */}
+                  {/* Trade snapshot */}
                   {(viewingEntry.trade_type || viewingEntry.trade_price || viewingEntry.trade_qty) && (
                     <div className="bg-white border border-gray-200 rounded-2xl p-4">
                       <div className="text-xs font-extrabold text-gray-700 mb-2">Trade Snapshot</div>
@@ -827,40 +1033,6 @@ const Diary: React.FC = () => {
                       />
                     </Tooltip>
                   </div>
-
-                  {/* AI feedback button */}
-                  <div className="flex items-center gap-3">
-                    <Tooltip text="Generate coaching feedback for this entry (may have rate limit)">
-                      <button
-                        type="button"
-                        onClick={() => requestFeedback(viewingEntry)}
-                        disabled={insightLoadingId === viewingEntry.id || isCooldown(viewingEntry.id)}
-                        className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-primary-200 bg-primary-50 text-xs font-bold text-primary-700 hover:bg-primary-100 hover:border-primary-300 disabled:opacity-50 disabled:hover:bg-primary-50"
-                      >
-                        {insightLoadingId === viewingEntry.id ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                        AI Feedback
-                      </button>
-                    </Tooltip>
-
-                    {isCooldown(viewingEntry.id) && <span className="text-[11px] font-medium text-gray-400">Try again in {cooldownLeft(viewingEntry.id)}s</span>}
-                    {!!entryError[viewingEntry.id] && <span className="text-[11px] font-semibold text-red-500">{entryError[viewingEntry.id]}</span>}
-                  </div>
-
-                  {/* Feedback panel */}
-                  {viewingEntry.aiFeedback && (
-                    <div className="pt-2 animate-in fade-in duration-500">
-                      <div className="flex items-start gap-3 bg-indigo-50 p-4 rounded-xl border border-indigo-100">
-                        <div className="p-2 bg-white rounded-full border border-indigo-100 shrink-0">
-                          <Sparkles size={18} className="text-indigo-600" />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-sm text-indigo-900 leading-relaxed font-medium whitespace-pre-wrap break-words">
-                            {viewingEntry.aiFeedback}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
 
                   {/* Close */}
                   <button
