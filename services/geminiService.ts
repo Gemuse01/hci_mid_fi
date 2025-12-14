@@ -2,6 +2,7 @@
 import { GoogleGenerativeAI, type Content } from "@google/generative-ai";
 import type { UserProfile, Portfolio, DiaryEntry } from "../types";
 import { PERSONA_DETAILS } from "../constants";
+import { apiUrl } from "./apiClient";
 
 /**
  * NOTE
@@ -412,7 +413,7 @@ export const generateDashboardLearningCards = async (
   if (typeof seed === "number") params.set("seed", String(seed));
 
   try {
-    const res = await fetch(`http://localhost:5002/api/dashboard-learning?${params.toString()}`);
+    const res = await fetch(apiUrl(`/api/dashboard-learning?${params.toString()}`));
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new Error(`Dashboard learning HTTP error ${res.status}: ${body || "<empty>"}`);
@@ -460,7 +461,7 @@ export const generateDashboardQuizzes = async (
   if (typeof seed === "number") params.set("seed", String(seed));
 
   try {
-    const res = await fetch(`http://localhost:5002/api/dashboard-quizzes?${params.toString()}`);
+    const res = await fetch(apiUrl(`/api/dashboard-quizzes?${params.toString()}`));
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new Error(`Dashboard quizzes HTTP error ${res.status}: ${body || "<empty>"}`);
@@ -712,8 +713,8 @@ export const analyzeNewsSentiment = async (
   relatedSymbols: string[]
 ): Promise<Sentiment> => {
   try {
-    // 백엔드 프록시 (/api/news-sentiment) 를 호출해서 감성 레이블만 받아옴
-    const res = await fetch("http://localhost:5002/api/news-sentiment", {
+    // Backend proxy (/api/news-sentiment) for sentiment labels
+    const res = await fetch(apiUrl("/api/news-sentiment"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

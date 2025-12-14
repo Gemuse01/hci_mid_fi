@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { NewsItem } from '../types';
 import { Newspaper, TrendingUp, TrendingDown, Minus, Clock, Tag, RefreshCw, ExternalLink, X } from 'lucide-react';
 import { analyzeNewsSentiment } from '../services/geminiService';
+import { apiUrl } from '../services/apiClient';
 
 const LS_NEWS_KEY = 'market_news_v1';
 
@@ -35,11 +36,11 @@ const News: React.FC = () => {
     try {
       const trimmed = symbol?.trim();
       const isDefaultFeed = !trimmed;
-      const url = trimmed
-        ? `http://localhost:5002/api/news?symbol=${encodeURIComponent(trimmed)}`
-        : 'http://localhost:5002/api/news';
+      const path = trimmed
+        ? `/api/news?symbol=${encodeURIComponent(trimmed)}`
+        : "/api/news";
 
-      const res = await fetch(url);
+      const res = await fetch(apiUrl(path));
       if (!res.ok) {
         throw new Error('Failed to fetch news');
       }
@@ -221,7 +222,7 @@ const News: React.FC = () => {
     // 1차: 백엔드 /api/search 를 통해 회사명/티커 검색 → 심볼 얻기
     try {
       const res = await fetch(
-        `http://localhost:5002/api/search?query=${encodeURIComponent(trimmed)}`
+        apiUrl(`/api/search?query=${encodeURIComponent(trimmed)}`)
       );
       if (res.ok) {
         const data = await res.json();
