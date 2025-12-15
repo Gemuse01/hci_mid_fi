@@ -24,7 +24,7 @@ interface Message {
 }
 
 const AiAgent: React.FC = () => {
-  const { user, portfolio, marketCondition } = useApp();
+  const { user, portfolio, marketCondition, updateUser } = useApp();
 
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<Message[]>([
@@ -116,6 +116,11 @@ How can I support your journey today?`,
           
           const result = await resp.json();
           if (result && typeof result.changed === 'boolean') {
+            // 🔑 페르소나가 변경되었거나 유지되었을 때 사용자 상태 업데이트
+            if (result.persona) {
+              updateUser({ persona: result.persona });
+            }
+            
             if (result.changed) {
               setMessages((prev) => [
                 ...prev,
