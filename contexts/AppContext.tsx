@@ -290,7 +290,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 export const useApp = () => {
   const context = useContext(AppContext);
   if (context === undefined) {
-    throw new Error('useApp must be used within an AppProvider');
+    // HMR/단독 렌더링 시 방어적 fallback (크래시 대신 기본 상태 반환)
+    return {
+      ...DEFAULT_STATE,
+      updateUser: () => {},
+      setMarketCondition: () => {},
+      executeTrade: () => {},
+      addDiaryEntry: () => '',
+      updateDiaryEntry: () => {},
+      resetApp: () => {},
+    } as AppContextType;
   }
   return context;
 };

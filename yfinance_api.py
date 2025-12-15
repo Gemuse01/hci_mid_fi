@@ -580,8 +580,9 @@ def news_sentiment():
     body: { "title": str, "summary": str, "symbols": [str] }
     응답: { "sentiment": "positive"|"negative"|"neutral" }
     """
+    # 환경변수가 없더라도 UX는 깨지지 않도록 항상 200과 neutral을 반환
     if openai_client is None:
-        return jsonify({"error": "SENTIMENT_API_KEY not configured", "sentiment": "neutral"}), 500
+        return jsonify({"sentiment": "neutral", "error": "SENTIMENT_API_KEY not configured"}), 200
 
     data = request.get_json(force=True) or {}
     title = (data.get("title") or "").strip()
@@ -618,7 +619,8 @@ def news_sentiment():
         return jsonify({"sentiment": raw.lower()})
     except Exception as e:
         print("[/api/news-sentiment] error:", e)
-        return jsonify({"error": str(e), "sentiment": "neutral"}), 500
+        # 실패해도 200으로 중립 반환 (프론트 콘솔 에러 최소화)
+        return jsonify({"sentiment": "neutral", "error": str(e)}), 200
 
 
 @app.route("/api/dashboard-learning", methods=["GET"])
@@ -628,7 +630,8 @@ def dashboard_learning():
     Response: { "cards": [ { "title", "duration", "category", "content" }, ... ] }
     """
     if openai_client is None:
-        return jsonify({"error": "SENTIMENT_API_KEY not configured", "cards": []}), 500
+        # 키가 없으면 기본 카드만 반환 (200)
+        return jsonify({"cards": []})
 
     # Optional: allow client to request count and seed (기본 3개)
     try:
@@ -690,7 +693,7 @@ Requirements:
         return jsonify({"cards": cards})
     except Exception as e:
         print("[/api/dashboard-learning] error:", e)
-        return jsonify({"error": str(e), "cards": []}), 500
+        return jsonify({"error": str(e), "cards": []})
 
 
 @app.route("/api/dashboard-quizzes", methods=["GET"])
@@ -699,8 +702,46 @@ def dashboard_quizzes():
     Generate multiple-choice quiz questions for the dashboard using GPT-5 nano.
     Response: { "quizzes": [ { "question", "options", "correctIndex", "explanation" }, ... ] }
     """
+    # 기본 샘플 퀴즈 (LLM 사용 불가 시 fallback)
+    fallback_quizzes = [
+        {
+            "question": "If a stock falls 10% from your entry price, what happens to the price?",
+            "options": [
+                "It is 10% higher than entry",
+                "It is 10% lower than entry",
+                "It is 5% lower than entry",
+                "It is unchanged",
+            ],
+            "correctIndex": 1,
+            "explanation": "A 10% drop means the stock is 10% below your entry price.",
+        },
+        {
+            "question": "What does diversification mainly help with?",
+            "options": [
+                "Maximizing leverage",
+                "Eliminating all risk",
+                "Reducing concentration risk",
+                "Guaranteeing profits",
+            ],
+            "correctIndex": 2,
+            "explanation": "Diversification spreads risk across assets to reduce concentration risk.",
+        },
+        {
+            "question": "For Korean stocks, what does the suffix .KQ typically mean?",
+            "options": [
+                "KOSPI",
+                "KOSDAQ",
+                "KRX bond market",
+                "ETF ticker",
+            ],
+            "correctIndex": 1,
+            "explanation": ".KQ denotes a KOSDAQ-listed stock.",
+        },
+    ]
+
     if openai_client is None:
-        return jsonify({"error": "SENTIMENT_API_KEY not configured", "quizzes": []}), 500
+        # 환경변수 미설정 시에도 UI가 동작하도록 샘플 반환 (200)
+        return jsonify({"quizzes": fallback_quizzes})
 
     try:
         count = int(request.args.get("count", "3"))
@@ -768,7 +809,8 @@ Rules:
         return jsonify({"quizzes": quizzes})
     except Exception as e:
         print("[/api/dashboard-quizzes] error:", e)
-        return jsonify({"error": str(e), "quizzes": []}), 500
+        # 실패 시에도 앱이 멈추지 않도록 fallback 반환 (200)
+        return jsonify({"error": str(e), "quizzes": fallback_quizzes})
 
 # -----------------------------
 # Qwen Finsec proxy endpoint

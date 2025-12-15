@@ -354,13 +354,18 @@ const VirtualTrading: React.FC = () => {
 
       if (symbolsToFetch.length === 0) return;
 
+      // 심볼별로 searchNasdaqStocks 를 재사용해 이름을 가져온다.
+      // - 로컬(dev + VITE_BACKEND_URL)에서는 Python yfinance 백엔드를 사용
+      // - Vercel 배포에서는 /api/search (Node 서버리스)을 사용
       const namePromises = symbolsToFetch.map(async (symbol) => {
         try {
-          const res = await fetch(`http://localhost:5002/api/search?query=${encodeURIComponent(symbol)}`);
-          if (!res.ok) return null;
-          const data = await res.json();
-          const result = data.results?.find((r: any) => r.symbol === symbol);
-          if (result?.name) return { symbol, name: result.name };
+          const results = await searchNasdaqStocks(symbol);
+          const matched =
+            results.find((r) => r.symbol === symbol) ||
+            results[0];
+          if (matched?.name) {
+            return { symbol, name: matched.name };
+          }
         } catch (err) {
           console.error(`[yfinance] Failed to fetch name for ${symbol}:`, err);
         }

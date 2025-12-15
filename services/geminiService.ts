@@ -506,6 +506,80 @@ export const generateDashboardLearningCards = async (
   seed?: number
 ): Promise<LearningCard[]> => {
   const safeCount = Math.max(1, Math.min(12, Math.floor(count))); // 1~12 cards per request
+
+  // 로컬 개발 환경(주로 localhost)에서는 백엔드 /api 대신
+  // 프론트에서 직접 mlapi.run을 호출해 카드 생성 (백엔드 의존도 ↓)
+  const isLocalhost =
+    typeof window !== "undefined" && window.location.hostname === "localhost";
+
+  if (isLocalhost) {
+    const prompt = `
+You are a financial educator for beginner retail investors.
+Create ${safeCount} short "5-minute learning" cards about basic investing concepts.
+
+Requirements:
+- Mix global topics and market context (for example: US tech, index ETFs, diversification, risk management).
+- Use clear, simple English. Do not include any Korean language.
+- Use the numeric session seed ${typeof seed === "number" ? seed : 0} to make results vary between calls.
+- Return ONLY valid JSON that can be parsed by JSON.parse, with this exact shape:
+[
+  {"title":"string","duration":"string like '3 min'","category":"string tag like 'Basic Term' | 'Strategy' | 'Market Concepts'","content":"markdown string, 3-5 short paragraphs, under 220 words total"},
+  ...
+]
+- Do not wrap the JSON in backticks.
+- Do not add any text before or after the JSON.
+`.trim();
+
+    try {
+      const text = await callMlChat(prompt, 900);
+      let raw: any;
+      try {
+        raw = JSON.parse(text);
+      } catch (err) {
+        console.warn(
+          "[geminiService] generateDashboardLearningCards (client) JSON parse error:",
+          err,
+          text
+        );
+        return [];
+      }
+
+      if (!Array.isArray(raw) || raw.length === 0) {
+        return [];
+      }
+
+      const cards: LearningCard[] = [];
+      raw.forEach((item: any, idx: number) => {
+        if (!item || typeof item !== "object") return;
+        const title = String(item.title || "").trim();
+        const content = String(item.content || "").trim();
+        const duration = String(item.duration || "5 min").trim();
+        const category = String(item.category || "Learning").trim();
+        if (!title || !content) return;
+        cards.push({
+          id: idx + 1,
+          title,
+          duration,
+          category,
+          content,
+        });
+      });
+
+      if (!cards.length) {
+        return [];
+      }
+
+      return cards;
+    } catch (err) {
+      console.warn(
+        "[geminiService] generateDashboardLearningCards (client) fallback due to error:",
+        err
+      );
+      return [];
+    }
+  }
+
+  // 프로덕션(Vercel) 및 백엔드가 있는 환경에서는 기존 /api/dashboard-learning 사용
   const params = new URLSearchParams();
   params.set("count", String(safeCount));
   if (typeof seed === "number") params.set("seed", String(seed));
@@ -519,7 +593,7 @@ export const generateDashboardLearningCards = async (
     const data: any = await res.json();
     const rawCards = data?.cards;
     if (!Array.isArray(rawCards) || rawCards.length === 0) {
-      throw new Error("Backend returned empty learning cards array.");
+      return [];
     }
 
     const cards: LearningCard[] = [];
@@ -540,12 +614,13 @@ export const generateDashboardLearningCards = async (
     });
 
     if (!cards.length) {
-      throw new Error("No valid learning cards extracted from backend output.");
+      return [];
     }
 
     return cards;
   } catch (err) {
-    throw toUserFacingError(err);
+    console.warn("[geminiService] generateDashboardLearningCards fallback due to error:", err);
+    return [];
   }
 };
 
@@ -554,6 +629,86 @@ export const generateDashboardQuizzes = async (
   seed?: number
 ): Promise<DashboardQuiz[]> => {
   const safeCount = Math.max(1, Math.min(20, Math.floor(count))); // 1~20 questions per request
+
+  const isLocalhost =
+    typeof window !== "undefined" && window.location.hostname === "localhost";
+
+  if (isLocalhost) {
+    const prompt = `
+You are creating multiple-choice quizzes for beginner retail investors.
+Generate ${safeCount} short questions about personal investing, risk management, stock markets (including Korean stocks like KOSPI/KOSDAQ) and basic products (ETFs, bonds, etc.).
+
+Return ONLY valid JSON that can be parsed by JSON.parse, with this exact structure:
+[
+  {"question":"string","options":["option A","option B","option C","option D"],"correctIndex":0,"explanation":"short explanation (2-3 sentences, under 80 words)"},
+  ...
+]
+
+Rules:
+- Exactly 4 options per question.
+- correctIndex is 0-based (0, 1, 2 or 3).
+- Do NOT include the correct answer text anywhere except via correctIndex and explanation.
+- No extra keys, no comments, no trailing commas, and nothing outside the JSON.
+- Use the numeric session seed ${typeof seed === "number" ? seed : 0} to make question sets differ between calls.
+`.trim();
+
+    try {
+      const text = await callMlChat(prompt, 900);
+      let raw: any;
+      try {
+        raw = JSON.parse(text);
+      } catch (err) {
+        console.warn(
+          "[geminiService] generateDashboardQuizzes (client) JSON parse error:",
+          err,
+          text
+        );
+        return [];
+      }
+
+      if (!Array.isArray(raw) || raw.length === 0) {
+        return [];
+      }
+
+      const quizzes: DashboardQuiz[] = [];
+      raw.forEach((item: any) => {
+        if (!item || typeof item !== "object") return;
+        const question = String(item.question || "").trim();
+        const options = Array.isArray(item.options)
+          ? item.options.map((o: any) => String(o || "").trim()).filter(Boolean)
+          : [];
+        const correctIndex = Number.isInteger(item.correctIndex)
+          ? Number(item.correctIndex)
+          : -1;
+        const explanation = String(item.explanation || "").trim();
+
+        if (!question || options.length !== 4) return;
+        if (correctIndex < 0 || correctIndex > 3) return;
+        if (!explanation) return;
+
+        quizzes.push({
+          question,
+          options,
+          correctIndex,
+          explanation,
+        });
+      });
+
+      if (!quizzes.length) {
+        return [];
+      }
+
+      return quizzes;
+    } catch (err) {
+      console.warn(
+        "[geminiService] generateDashboardQuizzes (client) fallback due to error:",
+        err
+      );
+      return [];
+    }
+  }
+
+  // 프로덕션(Vercel) 및 백엔드가 있는 환경에서는 기존 /api/dashboard-quizzes 사용
   const params = new URLSearchParams();
   params.set("count", String(safeCount));
   if (typeof seed === "number") params.set("seed", String(seed));
@@ -567,7 +722,7 @@ export const generateDashboardQuizzes = async (
     const data: any = await res.json();
     const rawQuizzes = data?.quizzes;
     if (!Array.isArray(rawQuizzes) || rawQuizzes.length === 0) {
-      throw new Error("Backend returned empty quizzes array.");
+      return [];
     }
 
     const quizzes: DashboardQuiz[] = [];
@@ -593,12 +748,13 @@ export const generateDashboardQuizzes = async (
     });
 
     if (!quizzes.length) {
-      throw new Error("No valid quizzes extracted from backend output.");
+      return [];
     }
 
     return quizzes;
   } catch (err) {
-    throw toUserFacingError(err);
+    console.warn("[geminiService] generateDashboardQuizzes fallback due to error:", err);
+    return [];
   }
 };
 
@@ -804,12 +960,23 @@ function parseSentimentFromApiResponse(data: any): Sentiment | null {
   return null;
 }
 
-// 뉴스 감성분석: mlapi.run 호출 + 실패 시 규칙 기반 fallback
+// 뉴스 감성분석
+// - 프로덕션: /api/news-sentiment (Node/Flask 프록시) 사용
+// - 로컬( localhost ): 백엔드 없이 rule-based 분석만 사용해 콘솔 에러/404 노이즈 제거
 export const analyzeNewsSentiment = async (
   title: string,
   summary: string,
   relatedSymbols: string[]
 ): Promise<Sentiment> => {
+  const isLocalhost =
+    typeof window !== "undefined" && window.location.hostname === "localhost";
+
+  if (isLocalhost) {
+    // 로컬에서는 백엔드 엔드포인트 없이 클라이언트에서 규칙 기반만 사용
+    const text = `${title} ${summary}`;
+    return ruleBasedNewsSentiment(text);
+  }
+
   try {
     // Backend proxy (/api/news-sentiment) for sentiment labels
     const res = await fetch(apiUrl("/api/news-sentiment"), {

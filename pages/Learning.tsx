@@ -72,6 +72,21 @@ const LS_LEARNING_KEY = 'dashboard_learning_v1';
 const LS_LEARNING_MISSIONS_KEY = 'learning_missions_v1';
 const LS_QUIZ_KEY = 'dashboard_quizzes_v1';
 
+// deterministic shuffle for fallback (seeded)
+function seededShuffle<T>(arr: T[], seed: number): T[] {
+  const a = [...arr];
+  let s = seed || 0;
+  const rand = () => {
+    s = (s * 1664525 + 1013904223) % 4294967296;
+    return s / 4294967296;
+  };
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
 const Learning: React.FC = () => {
   const { user } = useApp();
 
@@ -82,10 +97,31 @@ const Learning: React.FC = () => {
   const [quizStates, setQuizStates] = useState<Record<number, { answered: boolean; selectedIndex: number | null }>>({});
   const [activeQuizIdx, setActiveQuizIdx] = useState(0);
   const [quizPool, setQuizPool] = useState<DashboardQuiz[]>(DAILY_QUIZZES);
+  const FALLBACK_QUIZZES: DashboardQuiz[] = [
+    {
+      question: 'If a stock falls 10% from your entry, what happened to the price?',
+      options: ['It is 10% higher', 'It is 10% lower', 'It is 5% lower', 'Unchanged'],
+      correctIndex: 1,
+      explanation: 'A 10% drop means the price is 10% below your entry.',
+    },
+    {
+      question: 'What does diversification mainly reduce?',
+      options: ['Leverage', 'All risk', 'Concentration risk', 'Guaranteed profits'],
+      correctIndex: 2,
+      explanation: 'Spreading across assets lowers concentration risk.',
+    },
+    {
+      question: 'What does the suffix .KQ indicate for Korean stocks?',
+      options: ['KOSPI', 'KOSDAQ', 'KRX bond', 'ETF'],
+      correctIndex: 1,
+      explanation: '.KQ is typically used for KOSDAQ listings.',
+    },
+  ];
   const [isLoadingLearning, setIsLoadingLearning] = useState(false);
   const [isLoadingQuiz, setIsLoadingQuiz] = useState(false);
   const [learningSeed, setLearningSeed] = useState(0);
   const [quizSeed, setQuizSeed] = useState(0);
+  const quizSectionRef = React.useRef<HTMLDivElement | null>(null);
 
   // Load / regenerate learning cards
   // - On seed === 0, try localStorage cache first (warmed up by AppProvider prefetch)
@@ -113,11 +149,15 @@ const Learning: React.FC = () => {
       setIsLoadingLearning(true);
       try {
         const cards = await generateDashboardLearningCards(3, learningSeed);
-        if (!cancelled && cards && cards.length > 0) {
-          setLearningCards(cards);
+        if (!cancelled) {
+          const nextCards =
+            cards && cards.length > 0
+              ? cards
+              : seededShuffle(DEFAULT_LEARNING_CARDS, learningSeed).slice(0, 3);
+          setLearningCards(nextCards);
           if (typeof window !== 'undefined') {
             try {
-              window.localStorage.setItem(LS_LEARNING_KEY, JSON.stringify({ seed: learningSeed, cards }));
+              window.localStorage.setItem(LS_LEARNING_KEY, JSON.stringify({ seed: learningSeed, cards: nextCards }));
             } catch {
               // ignore
             }
@@ -125,6 +165,9 @@ const Learning: React.FC = () => {
         }
       } catch (err) {
         console.warn('[Learning] learning cards AI error (fallback to defaults):', err);
+        if (!cancelled) {
+          setLearningCards(seededShuffle(DEFAULT_LEARNING_CARDS, learningSeed).slice(0, 3));
+        }
       } finally {
         if (!cancelled) setIsLoadingLearning(false);
       }
@@ -165,6 +208,8 @@ const Learning: React.FC = () => {
         const quizzes = await generateDashboardQuizzes(3, quizSeed);
         if (!cancelled && quizzes && quizzes.length > 0) {
           setQuizPool(quizzes);
+          setQuizStates({});
+          setActiveQuizIdx(0);
           if (typeof window !== 'undefined') {
             try {
               window.localStorage.setItem(
@@ -175,9 +220,30 @@ const Learning: React.FC = () => {
               // ignore
             }
           }
+        } else if (!cancelled) {
+          const fallback = seededShuffle(FALLBACK_QUIZZES, quizSeed);
+          setQuizPool(fallback);
+          setQuizStates({});
+          setActiveQuizIdx(0);
         }
       } catch (err) {
         console.warn('[Learning] quizzes AI error (fallback to defaults):', err);
+        if (!cancelled) {
+          const fallback = seededShuffle(FALLBACK_QUIZZES, quizSeed);
+          setQuizPool(fallback);
+          setQuizStates({});
+          setActiveQuizIdx(0);
+          if (typeof window !== 'undefined') {
+            try {
+              window.localStorage.setItem(
+                LS_QUIZ_KEY,
+                JSON.stringify({ seed: quizSeed, quizzes: fallback }),
+              );
+            } catch {
+              // ignore
+            }
+          }
+        }
       } finally {
         if (!cancelled) setIsLoadingQuiz(false);
       }
@@ -189,6 +255,13 @@ const Learning: React.FC = () => {
       cancelled = true;
     };
   }, [quizSeed]);
+
+  // Regenerate 시 퀴즈 섹션으로 스크롤해 로딩 인디케이터가 보이도록
+  React.useEffect(() => {
+    if (isLoadingQuiz && quizSectionRef.current) {
+      quizSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [isLoadingQuiz]);
 
   // Rotate quiz pool based on day-of-year
   const visibleQuizzes = useMemo(() => {
@@ -315,8 +388,8 @@ const Learning: React.FC = () => {
         </div>
 
         {/* Daily Quiz Section */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
-          <div className="p-6 bg-gradient-to-r from-indigo-500 to-primary-600 text-white flex items-center gap-3">
+        <div ref={quizSectionRef} className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+            <div className="p-6 bg-gradient-to-r from-indigo-500 to-primary-600 text-white flex items-center gap-3">
             <div className="p-2 bg-white/20 rounded-lg">
               <GraduationCap size={24} />
             </div>
@@ -331,8 +404,8 @@ const Learning: React.FC = () => {
               onClick={() => setQuizSeed((v) => v + 1)}
               className="ml-auto px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold flex items-center gap-1 transition-colors"
             >
-              <RefreshCw size={14} className={isLoadingQuiz ? 'animate-spin' : ''} />
-              <span>Regenerate</span>
+                <RefreshCw size={14} className={isLoadingQuiz ? 'animate-spin' : ''} />
+                <span>{isLoadingQuiz ? 'Generating...' : 'Regenerate'}</span>
             </button>
           </div>
           <div className="p-6">

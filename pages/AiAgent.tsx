@@ -143,6 +143,8 @@ How can I support your journey today?`,
 
   // 세션 선택
   const selectSession = React.useCallback((sessionId: string) => {
+    // 응답 대기 중에는 세션 전환을 막아, 답변이 다른 세션에 들어가는 것을 방지
+    if (isLoading) return;
     setCurrentSessionId(sessionId);
     // 메시지 직접 로드 (loadMessages 함수 의존성 제거)
     if (typeof window === 'undefined') return;
@@ -170,6 +172,7 @@ How can I support your journey today?`,
   // 세션 삭제
   const deleteSession = (sessionId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    if (isLoading) return;
     if (typeof window === 'undefined') return;
     
     try {
@@ -254,6 +257,7 @@ How can I support your journey today?`,
   }, []); // 마운트 시에만 실행
 
   const handleNewChat = React.useCallback(() => {
+    if (isLoading) return;
     // 새 세션 생성
     const newSessionId = `session_${Date.now()}`;
     const newSession: ChatSession = {
@@ -404,6 +408,38 @@ How can I support your journey today?`,
   const handleSend = async (textInput: string) => {
     if (!textInput.trim() || isLoading) return;
 
+    // 세션이 아직 없다면, 첫 사용자 메시지를 보내는 순간 기본 세션을 자동 생성
+    if (!currentSessionId) {
+      const newSessionId = `session_${Date.now()}`;
+      const initial = [createInitialMessage()];
+      const now = new Date();
+      const newSession: ChatSession = {
+        id: newSessionId,
+        title: 'New Chat',
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      if (typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(
+            getSessionStorageKey(newSessionId),
+            JSON.stringify(initial)
+          );
+        } catch {
+          // ignore storage errors
+        }
+      }
+
+      setSessions(prev => {
+        const updated = [newSession, ...prev];
+        saveSessions(updated);
+        return updated;
+      });
+      setCurrentSessionId(newSessionId);
+      setMessages(initial);
+    }
+
     const userMsg: Message = {
       id: Date.now().toString(),
       role: 'user',
@@ -510,7 +546,8 @@ How can I support your journey today?`,
           <div className="p-4 border-b border-gray-200">
             <button
               onClick={handleNewChat}
-              className="w-full flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
+              disabled={isLoading}
+              className="w-full flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors disabled:opacity-50"
             >
               <Sparkles size={18} />
               <span className="font-medium">New Chat</span>
@@ -584,8 +621,9 @@ How can I support your journey today?`,
           {/* 사이드바 토글 버튼 (모바일) */}
           <button
             type="button"
-            onClick={() => setSidebarOpen(true)}
-            className="md:hidden inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs md:text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+            onClick={() => !isLoading && setSidebarOpen(true)}
+            disabled={isLoading}
+            className="md:hidden inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs md:text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
             <Menu size={16} className="text-gray-500" />
             <span>History</span>
@@ -595,7 +633,8 @@ How can I support your journey today?`,
           <button
             type="button"
             onClick={handleNewChat}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs md:text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+            disabled={isLoading}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs md:text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
             <Sparkles size={16} className="text-gray-500" />
             <span>New chat</span>
