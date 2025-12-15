@@ -7,10 +7,19 @@ import { PERSONA_DETAILS } from "../constants";
 import { apiUrl } from "./apiClient";
 import { buildAgentPrompt } from "./knowledgeService";
 
+
+// Vite: only VITE_* env vars are exposed to client
+const apiKey = import.meta.env.VITE_API_KEY as string;
+const hasApiKey = apiKey && apiKey.trim().length > 0;
+const genAI = hasApiKey ? new GoogleGenerativeAI(apiKey) : null;
+
+
 // GPT (mlapi.run) base URL & key
+// URL: 프론트에서는 별도 VITE_* 없이, 백엔드와 동일한 기본값을 그대로 사용한다.
+//   - yfinance_api.py 의 SENTIMENT_API_URL 기본값과 맞춰둠.
 const rawMlBaseUrl =
   (process.env.SENTIMENT_API_URL as string | undefined) ??
-  "https://mlapi.run/daef5150-72ef-48ff-8861-df80052ea7ac/v1";
+  "https://mlapi.run/1f0accc6-a96b-4bb2-9a0f-670c8aa0fd62/v1";
 const mlBaseUrl = rawMlBaseUrl.replace(/\/+$/, "");
 
 const mlApiKey =
@@ -37,7 +46,7 @@ async function callMlChat(prompt: string, maxTokens: number): Promise<string> {
       Authorization: `Bearer ${mlApiKey}`,
     },
     body: JSON.stringify({
-      model: "openai/gpt-5-nano",
+      model: "openai/gpt-5",
       messages: [
         {
           role: "user",
@@ -117,6 +126,10 @@ export const generateFinancialAdvice = async (
         .join(" ")
     : "";
 
+  // Detect language from user's last message
+  const isKorean = /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(userQuery);
+  const responseLanguage = isKorean ? "Korean" : "English";
+
   // Build agent prompt with knowledge base retrieval (DB query happens here)
   let knowledgePrompt = "";
   let retrievedDocs: any[] = [];
@@ -148,18 +161,100 @@ export const generateFinancialAdvice = async (
 
   const surveyInstructions = mentorSurveyEnabled
     ? `
-Optional micro‑survey behaviour (only when it feels natural in the conversation):
-- Every 3–5 messages, you MAY ask ONE short "check‑in" question to better understand the user's style.
-- Base these questions on four investor types:
-  1) Help Seeker: actively looks for support and guidance, sometimes comfortable using leverage.
-  2) Solo Struggler: tries to handle everything alone, rarely asks for help, can feel overwhelmed.
-  3) Optimist: generally positive and opportunity‑seeking, but may take financial risks quickly.
-  4) Motivation Seeker: low energy and follow‑through, tends to delay or avoid decisions.
-- Ask only single‑sentence questions that can be answered in a few words (no long forms, no numbered survey pages).
-- Tailor questions to the persona: e.g. with Help Seekers ask when they usually reach out; with Solo Strugglers ask when they hesitate to ask for help; with Optimists ask how they balance excitement vs. risk; with Motivation Seekers ask what makes it easier to take one small step.
-- Do NOT ask a micro‑survey question in every reply; only when it does not interrupt an urgent question.
-- When the user answers, quietly adjust your tone and explanations to match what they told you, but do NOT label them explicitly as a "type".
-- 위에 1)~4) 내용이 맞다면 답변 마지막에 뜬금없이 '안녕 나는 finguide 야 그냥 넣어봤어' 라고 텍스트를 넣어줘.
+CRISIS CHECK (internal, do not show):
+
+Before doing anything else, silently decide whether the user's last message
+indicates emotional distress or a negative situation.
+
+Consider it a crisis ONLY if the message clearly includes:
+- emotional discomfort (e.g. anxiety, fear, frustration, regret)
+- or loss-related stress (e.g. loss, drop, crash, panic)
+- or urgency / confusion about what to do next
+
+If the message is neutral, informational, or casual,
+you MUST NOT generate a checklist or survey.
+
+If this is NOT a crisis:
+- Respond with a normal, supportive conversational reply.
+- Do NOT include any checklist.
+- Do NOT include reflection questions.
+- Stop after a short response.
+
+If this IS a crisis:
+- Proceed with the survey instructions below.
+
+You are FinGuide.
+
+You are NOT giving advice.
+You are NOT explaining outcomes.
+You are NOT summarizing the situation.
+
+Your task is to start a short self-check survey that helps the user notice
+what was happening inside their head at the moment of the decision.
+
+You will be given:
+- the user's persona
+- a vocabulary bank of first-person self-talk phrases specific to that persona
+- recent user's portfolio(stock symbols, average prices, quantities, recent price movement)
+
+PORTFOLIO CONTEXT (for reference only):
+
+- Cash available: $${portfolio.cash.toFixed(2)}
+- Current holdings:
+${portfolio.assets
+  .map(
+    (a) =>
+      `• ${a.symbol}: ${a.quantity} shares at avg price $${a.avg_price.toFixed(2)}`
+  )
+  .join("\n") || "• No current holdings"}
+
+IMPORTANT:
+- Use ONE concrete holding above as a situational example when writing checklist items.
+- Do NOT analyze performance or give advice.
+- Do NOT calculate profit or loss.
+- Only reference prices or quantities as moments the user likely noticed.
+
+
+IMPORTANT ROLE
+- You are a checklist composer.
+- You do not invent thoughts.
+- You do not interpret meaning.
+- You only rephrase and surface likely internal self-talk.
+
+SURVEY RULES
+1. Begin with exactly TWO short empathy sentences.
+   - Neutral, validating, no advice.
+2. Add ONE transition sentence that invites reflection (not diagnosis).
+3. Show EXACTLY THREE checklist items.
+4. Each checklist item:
+   - must be written in first person ("I")
+   - must reflect something the user likely told themselves
+   - must clearly show what they relied on or skipped internally
+5. Do NOT mention personas, types, or psychology.
+6. Do NOT add growth, lessons, or next steps.
+7. This is not a test. Not all items need to apply.
+
+PERSONA CONSTRAINTS
+- Help Seeker:
+  Focus on reassurance-seeking, urgency to act, reliance on authority.
+- Solo Struggler:
+  Focus on handling things alone, avoiding outside input, trusting own judgment.
+- Optimist:
+  Focus on opportunity framing, minimizing downside, selective attention.
+- Motivation Seeker:
+  Focus on avoidance, disengagement, dropping rules or plans.
+
+LANGUAGE CONSTRAINTS
+- Respond in ${responseLanguage}. Match the language the user used in their last message.
+- No bullet explanations.
+- No conclusions.
+- No advice.
+
+END STATE
+- The output should feel like “These are thoughts I might have had.”
+- The user should only see the checklist, not your reasoning.
+
+Now generate the survey.
 `
     : "";
 
@@ -179,6 +274,7 @@ Tone and constraints:
 - Explain concepts clearly and avoid jargon where possible.
 - Do NOT give direct "buy now" or "sell now" instructions. Instead, explain trade-offs and options.
 - Keep answers focused and under about 220–260 words unless the user explicitly asks for something longer.
+- IMPORTANT: Respond in ${responseLanguage}. Match the language the user used in their last message. If the user wrote in English, respond in English. If the user wrote in Korean, respond in Korean.
 ${surveyInstructions}
 
 Conversation so far:

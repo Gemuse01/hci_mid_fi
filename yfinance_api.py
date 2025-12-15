@@ -530,7 +530,7 @@ def get_news():
 
 
 # -----------------------------
-# GPT-5 nano sentiment proxy  (/api/news-sentiment)
+# GPT-5 sentiment proxy  (/api/news-sentiment)
 # -----------------------------
 
 # (OpenAI client is already set up at top of file and injected into app.config)
@@ -572,7 +572,7 @@ def _normalize_link_value(raw):
 
 def call_openai_json(prompt: str, max_tokens: int = 800):
     """
-    Helper to call the GPT-5 nano (mlapi) chat completion endpoint and parse JSON from content.
+    Helper to call the GPT-5 (mlapi) chat completion endpoint and parse JSON from content.
     Assumes openai_client is configured as an OpenAI(base_url=..., api_key=...).
     """
     if openai_client is None:
@@ -583,7 +583,7 @@ def call_openai_json(prompt: str, max_tokens: int = 800):
     #   돌려주는 문제가 있어서 여기서는 토큰 제한을 명시적으로 주지 않는다.
     # - 모델 기본값에 맡기고, 너무 길게 나오면 프롬프트 쪽에서 길이를 제한하는 방식으로 제어한다.
     resp = openai_client.chat.completions.create(
-        model="openai/gpt-5-nano",
+        model="openai/gpt-5",
         messages=[
             {
                 "role": "user",
@@ -609,7 +609,7 @@ def call_openai_json(prompt: str, max_tokens: int = 800):
 @app.route("/api/news-sentiment", methods=["POST"])
 def news_sentiment():
     """
-    프론트에서 뉴스 제목/요약을 보내면 GPT-5 nano로 감성분석 수행.
+    프론트에서 뉴스 제목/요약을 보내면 GPT-5로 감성분석 수행.
     body: { "title": str, "summary": str, "symbols": [str] }
     응답: { "sentiment": "positive"|"negative"|"neutral" }
     """
@@ -628,7 +628,7 @@ def news_sentiment():
         user_text = f"Headline: {title[:200]}\n\nSummary: {summary[:600]}\nSymbols: {', '.join(symbols) if isinstance(symbols, list) else symbols}"
 
         resp = openai_client.chat.completions.create(
-            model="openai/gpt-5-nano",
+            model="openai/gpt-5",
             messages=[
                 {
                     "role": "system",
@@ -657,7 +657,7 @@ def news_sentiment():
 @app.route("/api/dashboard-learning", methods=["GET"])
 def dashboard_learning():
     """
-    Generate 5-minute learning cards for the dashboard using GPT-5 nano.
+    Generate 5-minute learning cards for the dashboard using GPT-5.
     Response: { "cards": [ { "title", "duration", "category", "content" }, ... ] }
     """
     if openai_client is None:
@@ -729,7 +729,7 @@ Requirements:
 @app.route("/api/dashboard-quizzes", methods=["GET"])
 def dashboard_quizzes():
     """
-    Generate multiple-choice quiz questions for the dashboard using GPT-5 nano.
+    Generate multiple-choice quiz questions for the dashboard using GPT-5.
     Response: { "quizzes": [ { "question", "options", "correctIndex", "explanation" }, ... ] }
     """
     if openai_client is None:

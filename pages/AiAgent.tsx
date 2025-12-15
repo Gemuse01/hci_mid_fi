@@ -85,6 +85,16 @@ How can I support your journey today?`,
 
     // 설문 대기 중일 때: 설문 답변 입력 처리
     if (surveyPending && surveyQuestions) {
+      // 먼저 사용자 메시지를 채팅에 추가
+      const userMsg: Message = {
+        id: Date.now().toString(),
+        role: 'user',
+        text: textInput,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, userMsg]);
+      setInput('');
+      
       // Parse exactly 3 answers from last 3 sentences
       const sentences = textInput
         .split(/[\.?!…。]+/)
