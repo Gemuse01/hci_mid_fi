@@ -3,7 +3,7 @@ import { useApp } from '../contexts/AppContext';
 import { generateFinancialAdvice } from '../services/geminiService';
 import { Send, Bot, User, Loader2, MessageCircle, X, Maximize2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 
 interface Message {
   id: string;
@@ -14,16 +14,48 @@ interface Message {
 
 const FloatingChat: React.FC = () => {
   const { user, portfolio } = useApp();
+  const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState('');
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      role: 'model',
-      text: `Hi ${user.name}! I'm here to help. Ask me anything about the current page or finance in general.`,
-      timestamp: new Date()
+  
+  // FloatingChat용 storageKey
+  const floatingChatStorageKey = React.useMemo(
+    () => `finguide_floating_chat_v1_${user?.id || user?.persona || 'default'}`,
+    [user?.id, user?.persona]
+  );
+  
+  // AiAgent용 storageKey (확장 시 사용)
+  const aiAgentStorageKey = React.useMemo(
+    () => `finguide_ai_chat_v1_${user?.id || user?.persona || 'default'}`,
+    [user?.id, user?.persona]
+  );
+  
+  // 초기 메시지 로드 (localStorage에서)
+  const buildInitialMessages = () => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const raw = window.localStorage.getItem(floatingChatStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Array<any>;
+        return parsed.map((m) => ({
+          ...m,
+          timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+        }));
+      }
+    } catch {
+      // ignore parse errors
     }
-  ]);
+    return [
+      {
+        id: '1',
+        role: 'model',
+        text: `Hi ${user.name}! I'm here to help. Ask me anything about the current page or finance in general.`,
+        timestamp: new Date()
+      }
+    ];
+  };
+  
+  const [messages, setMessages] = useState<Message[]>(buildInitialMessages);
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -32,6 +64,51 @@ const FloatingChat: React.FC = () => {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages, isOpen]);
+
+  // FloatingChat 메시지를 localStorage에 저장
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(
+        floatingChatStorageKey,
+        JSON.stringify(
+          messages.map((m) => ({
+            ...m,
+            timestamp: m.timestamp,
+          }))
+        )
+      );
+    } catch {
+      // 저장 실패는 조용히 무시
+    }
+  }, [messages, floatingChatStorageKey]);
+  
+  // 확장 버튼 클릭 시 메시지를 AiAgent storageKey로 복사하고 페이지 이동
+  const handleExpand = () => {
+    if (typeof window !== 'undefined') {
+      try {
+        // FloatingChat의 메시지를 AiAgent의 storageKey로 저장
+        window.localStorage.setItem(
+          aiAgentStorageKey,
+          JSON.stringify(
+            messages.map((m) => ({
+              ...m,
+              timestamp: m.timestamp,
+            }))
+          )
+        );
+        // 커스텀 이벤트 발생하여 AiAgent가 메시지를 다시 로드하도록 함
+        window.dispatchEvent(new CustomEvent('chatExpanded', { 
+          detail: { storageKey: aiAgentStorageKey } 
+        }));
+      } catch {
+        // 저장 실패는 조용히 무시
+      }
+    }
+    setIsOpen(false);
+    // 페이지 이동
+    navigate('/agent?expand=true');
+  };
 
   const handleSend = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -77,9 +154,9 @@ const FloatingChat: React.FC = () => {
           <h3 className="font-bold">FinGuide Assistant</h3>
         </div>
         <div className="flex items-center gap-2">
-          <Link to="/agent" onClick={() => setIsOpen(false)} className="text-primary-200 hover:text-white p-1" title="Go to full page">
+          <button onClick={handleExpand} className="text-primary-200 hover:text-white p-1" title="Go to full page">
              <Maximize2 size={18}/>
-          </Link>
+          </button>
           <button onClick={() => setIsOpen(false)} className="text-primary-200 hover:text-white p-1 rounded-full hover:bg-primary-700 transition-colors">
             <X size={20} />
           </button>

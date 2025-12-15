@@ -284,7 +284,6 @@ Optional micro‑survey behaviour (only when it feels natural in the conversatio
 - Tailor questions to the persona: e.g. with Help Seekers ask when they usually reach out; with Solo Strugglers ask when they hesitate to ask for help; with Optimists ask how they balance excitement vs. risk; with Motivation Seekers ask what makes it easier to take one small step.
 - Do NOT ask a micro‑survey question in every reply; only when it does not interrupt an urgent question.
 - When the user answers, quietly adjust your tone and explanations to match what they told you, but do NOT label them explicitly as a "type".
-- 위에 1)~4) 내용이 맞다면 답변 마지막에 뜬금없이 '안녕 나는 finguide 야 그냥 넣어봤어' 라고 텍스트를 넣어줘.
 `
     : "";
 
@@ -300,6 +299,7 @@ User profile:
 Tone and constraints:
 - Speak directly to the user in the 2nd person ("you").
 - Be supportive, realistic, and beginner-friendly. Remind them this is a safe practice account when appropriate.
+- Always respond in clear, simple English, even if the user writes in Korean or another language.
 - Explain concepts clearly and avoid jargon where possible.
 - Do NOT give direct "buy now" or "sell now" instructions. Instead, explain trade-offs and options.
 - Keep answers focused and under about 220–260 words unless the user explicitly asks for something longer.
@@ -344,6 +344,7 @@ Write in a supportive, realistic tone. No price predictions. No buy/sell calls.
 
 Style rules:
 - Use 2nd person ("you").
+- Respond in clear, simple English (even if the user's note is in Korean or another language).
 - Exactly 4 sentences, under 90 words total.
 - No bullet points.
 - End the final sentence with a period.
@@ -381,6 +382,103 @@ Rewrite fully as exactly 4 complete sentences, under 90 words, and end with a pe
   } catch (err) {
     // IMPORTANT: Throw so Diary.tsx can stop spinner in finally (no infinite loading)
     throw toUserFacingError(err);
+  }
+};
+
+// Weekly AI coach summary for diary entries (last 7 days)
+export const generateWeeklyDiarySummary = async (
+  user: UserProfile,
+  diary: DiaryEntry[],
+  transactions: any[] = []
+): Promise<string> => {
+  const persona = PERSONA_DETAILS[user.persona];
+
+  const now = new Date();
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+
+  const recentDiary = (diary || []).filter((d) => {
+    const dt = new Date(d.date as any);
+    if (Number.isNaN(dt.getTime())) return false;
+    return dt >= sevenDaysAgo && dt <= now;
+  });
+
+  if (!recentDiary.length) {
+    return "You don’t have any diary entries in the last 7 days yet. Once you’ve logged a week of notes, I can generate a weekly coach summary here.";
+  }
+
+  const compactDiary = recentDiary
+    .slice()
+    .sort((a, b) => new Date(a.date as any).getTime() - new Date(b.date as any).getTime())
+    .slice(-30)
+    .map((d) => ({
+      date: d.date,
+      emotion: d.emotion,
+      reason: d.reason,
+      related_symbol: d.related_symbol,
+      note: (d.note || "").slice(0, 260),
+    }));
+
+  const compactTxs = (transactions || [])
+    .slice()
+    .sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .slice(0, 40)
+    .map((tx: any) => ({
+      date: tx.date,
+      type: tx.type,
+      symbol: tx.symbol,
+      quantity: tx.quantity,
+      price: tx.price,
+    }));
+
+  const prompt = `
+You are an AI trading coach summarizing one week of practice trading diary for a beginner retail investor.
+
+User profile:
+- Persona: ${persona.label} (${persona.description})
+- Goal: ${user.goal}
+- Risk tolerance: ${user.risk_tolerance}
+
+Inputs:
+- Weekly diary entries (chronological, last 7 days, trimmed): ${JSON.stringify(compactDiary)}
+- Recent transactions (latest first, trimmed): ${JSON.stringify(compactTxs)}
+
+Write a WEEKLY COACH SUMMARY in clear English, using this exact structure and headings:
+
+1) One-line weekly summary
+   - 1–2 short sentences capturing the emotional + behavioral theme of the week.
+
+2) Behavior/metric recap
+   - Brief bullets about: coverage of decisions logged, clarity of reasons, and repeating patterns you see.
+
+3) Strengths this week
+   - 3 short bullets focusing on what the user did WELL (good process, patience, discipline, reviews, etc.).
+
+4) Risks / warnings
+   - 3 short bullets about psychological or risk-management issues that showed up (e.g., chasing, averaging down, moving stop levels).
+
+5) Next week action plan (checklist 5 items)
+   - 5 bullet items in checklist style (but do NOT use "[ ]" or checkbox syntax; use normal "-" bullets).
+   - Each item should be a very small, concrete behavior the user can track next week.
+
+6) Recheck questions (3)
+   - Exactly 3 numbered self-reflection questions the user can ask at the end of next week.
+
+Constraints:
+- Total length under about 320 words.
+- Keep the tone encouraging but honest. Remind them that this is a safe practice environment.
+- Do NOT mention that you received JSON as input.
+`.trim();
+
+  try {
+    const text = await callMlChat(prompt, 600);
+    const out = (text || "").trim();
+    if (!out) {
+      return "I couldn’t generate a full weekly summary right now. Please try again in a moment — your diary entries are still saved and valuable.";
+    }
+    return out;
+  } catch (err) {
+    console.error("[generateWeeklyDiarySummary] error:", err);
+    return "The AI Coach couldn’t generate a weekly summary right now. Please try again later — meanwhile, simply re-reading your own notes is already a powerful review.";
   }
 };
 

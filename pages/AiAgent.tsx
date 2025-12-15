@@ -13,8 +13,13 @@ import {
   AlertTriangle,
   Shield,
   ShieldAlert,
+  MessageSquare,
+  Trash2,
+  Menu,
+  X,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import { useSearchParams } from 'react-router-dom';
 
 interface Message {
   id: string;
@@ -23,22 +28,78 @@ interface Message {
   timestamp: Date;
 }
 
+interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 const AiAgent: React.FC = () => {
   const { user, portfolio, marketCondition } = useApp();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  const sessionsStorageKey = React.useMemo(
+    () => `finguide_ai_chat_sessions_${user?.id || user?.persona || 'default'}`,
+    [user?.id, user?.persona]
+  );
+
+  const getSessionStorageKey = React.useCallback((sessionId: string) => 
+    `finguide_ai_chat_${user?.id || user?.persona || 'default'}_${sessionId}`,
+    [user?.id, user?.persona]
+  );
+
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
 
   const [input, setInput] = useState('');
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      role: 'model',
-      text: `Hello ${user.name}! I'm your personalized FinGuide mentor. 
+  
+  // 세션 목록 로드
+  const loadSessions = React.useCallback(() => {
+    if (typeof window === 'undefined') return [];
+    try {
+      const raw = window.localStorage.getItem(sessionsStorageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Array<any>;
+        return parsed.map((s) => ({
+          ...s,
+          createdAt: new Date(s.createdAt),
+          updatedAt: new Date(s.updatedAt),
+        })).sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  }, [sessionsStorageKey]);
+
+  // 세션 목록 저장
+  const saveSessions = React.useCallback((sessionsList: ChatSession[]) => {
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem(
+        sessionsStorageKey,
+        JSON.stringify(sessionsList)
+      );
+    } catch {
+      // ignore
+    }
+  }, [sessionsStorageKey]);
+
+  // 초기 메시지 생성
+  const createInitialMessage = (): Message => ({
+    id: '1',
+    role: 'model',
+    text: `Hello ${user.name}! I'm your personalized FinGuide mentor. 
 
 I know you're here for **${user.goal}** and prefer a **${user.risk_tolerance}** risk approach. The market is currently simulated as **${marketCondition}**. 
 
 How can I support your journey today?`,
-      timestamp: new Date(),
-    },
-  ]);
+    timestamp: new Date(),
+  });
+
+  const [messages, setMessages] = useState<Message[]>([createInitialMessage()]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSecurityMode, setIsSecurityMode] = useState(false);
 
@@ -51,6 +112,241 @@ How can I support your journey today?`,
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // 메시지 로드 함수
+  const loadMessages = React.useCallback((sessionId: string | null) => {
+    if (typeof window === 'undefined') return;
+    
+    const initialMsg = createInitialMessage();
+    
+    if (!sessionId) {
+      setMessages([initialMsg]);
+      return;
+    }
+    
+    try {
+      const raw = window.localStorage.getItem(getSessionStorageKey(sessionId));
+      if (raw) {
+        const parsed = JSON.parse(raw) as Array<any>;
+        const loadedMessages = parsed.map((m) => ({
+          ...m,
+          timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+        }));
+        setMessages(loadedMessages);
+      } else {
+        setMessages([initialMsg]);
+      }
+    } catch {
+      setMessages([initialMsg]);
+    }
+  }, [getSessionStorageKey, createInitialMessage]);
+
+  // 세션 선택
+  const selectSession = (sessionId: string) => {
+    setCurrentSessionId(sessionId);
+    loadMessages(sessionId);
+    setSidebarOpen(false);
+  };
+
+  // 세션 삭제
+  const deleteSession = (sessionId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (typeof window === 'undefined') return;
+    
+    try {
+      // 세션 메시지 삭제
+      window.localStorage.removeItem(getSessionStorageKey(sessionId));
+      
+      // 세션 목록에서 제거
+      const updatedSessions = sessions.filter(s => s.id !== sessionId);
+      setSessions(updatedSessions);
+      saveSessions(updatedSessions);
+      
+      // 현재 세션이 삭제된 세션이면 새 채팅 시작
+      if (currentSessionId === sessionId) {
+        const newSessionId = `session_${Date.now()}`;
+        const newSession: ChatSession = {
+          id: newSessionId,
+          title: 'New Chat',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        const initial = [createInitialMessage()];
+        
+        if (typeof window !== 'undefined') {
+          try {
+            window.localStorage.setItem(
+              getSessionStorageKey(newSessionId),
+              JSON.stringify(initial)
+            );
+          } catch {
+            // ignore
+          }
+        }
+        
+        const finalSessions = [newSession, ...updatedSessions];
+        setSessions(finalSessions);
+        saveSessions(finalSessions);
+        setCurrentSessionId(newSessionId);
+        setMessages(initial);
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  // 컴포넌트 마운트 시 세션 목록 로드
+  useEffect(() => {
+    const loadedSessions = loadSessions();
+    setSessions(loadedSessions);
+    
+    // 가장 최근 세션이 있으면 자동 선택
+    if (loadedSessions.length > 0) {
+      setCurrentSessionId(loadedSessions[0].id);
+      loadMessages(loadedSessions[0].id);
+    }
+  }, [loadSessions, loadMessages]);
+
+  const handleNewChat = React.useCallback(() => {
+    // 새 세션 생성
+    const newSessionId = `session_${Date.now()}`;
+    const newSession: ChatSession = {
+      id: newSessionId,
+      title: 'New Chat',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    
+    // 초기 메시지
+    const initial = [createInitialMessage()];
+    
+    // 세션 저장
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(
+          getSessionStorageKey(newSessionId),
+          JSON.stringify(initial)
+        );
+      } catch {
+        // ignore
+      }
+    }
+    
+    // 세션 목록 업데이트
+    setSessions(prev => {
+      const updatedSessions = [newSession, ...prev];
+      saveSessions(updatedSessions);
+      return updatedSessions;
+    });
+    
+    // 새 세션 선택
+    setCurrentSessionId(newSessionId);
+    setMessages(initial);
+  }, [getSessionStorageKey, saveSessions, createInitialMessage]);
+
+  // 확장 플래그 확인 및 처리 (URL 쿼리 파라미터)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    const isExpanded = searchParams.get('expand') === 'true';
+    
+    // URL에 expand 파라미터가 있으면 새 세션 생성
+    if (isExpanded) {
+      handleNewChat();
+      setSearchParams({}, { replace: true });
+    }
+  }, [searchParams, setSearchParams, handleNewChat]);
+
+  // 커스텀 이벤트 감지 (FloatingChat에서 확장 버튼 클릭 시)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    const handleChatExpanded = (e: CustomEvent) => {
+      // FloatingChat 메시지를 새 세션으로 가져오기
+      const aiAgentStorageKey = `finguide_ai_chat_v1_${user?.id || user?.persona || 'default'}`;
+      if (e.detail?.storageKey === aiAgentStorageKey) {
+        try {
+          const raw = window.localStorage.getItem(aiAgentStorageKey);
+          if (raw) {
+            const parsed = JSON.parse(raw) as Array<any>;
+            const loadedMessages = parsed.map((m) => ({
+              ...m,
+              timestamp: m.timestamp ? new Date(m.timestamp) : new Date(),
+            }));
+            
+            // 새 세션 생성
+            const newSessionId = `session_${Date.now()}`;
+            const firstUserMessage = loadedMessages.find(m => m.role === 'user');
+            const sessionTitle = firstUserMessage 
+              ? firstUserMessage.text.substring(0, 50) 
+              : 'New Chat';
+            
+            const newSession: ChatSession = {
+              id: newSessionId,
+              title: sessionTitle,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            };
+            
+            // 세션 저장
+            window.localStorage.setItem(
+              getSessionStorageKey(newSessionId),
+              JSON.stringify(loadedMessages)
+            );
+            
+            // 세션 목록 업데이트
+            const updatedSessions = [newSession, ...sessions];
+            setSessions(updatedSessions);
+            saveSessions(updatedSessions);
+            
+            // 세션 선택
+            selectSession(newSessionId);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    };
+    
+    window.addEventListener('chatExpanded', handleChatExpanded as EventListener);
+    return () => {
+      window.removeEventListener('chatExpanded', handleChatExpanded as EventListener);
+    };
+  }, [sessions, getSessionStorageKey, saveSessions, selectSession]);
+
+  // 채팅 히스토리를 로컬스토리지에 저장
+  useEffect(() => {
+    if (typeof window === 'undefined' || !currentSessionId) return;
+    
+    try {
+      // 메시지 저장
+      window.localStorage.setItem(
+        getSessionStorageKey(currentSessionId),
+        JSON.stringify(
+          messages.map((m) => ({
+            ...m,
+            timestamp: m.timestamp,
+          }))
+        )
+      );
+      
+      // 세션 제목 업데이트 (첫 번째 사용자 메시지 사용)
+      const firstUserMessage = messages.find(m => m.role === 'user');
+      if (firstUserMessage) {
+        const sessionTitle = firstUserMessage.text.substring(0, 50);
+        const updatedSessions = sessions.map(s => 
+          s.id === currentSessionId 
+            ? { ...s, title: sessionTitle, updatedAt: new Date() }
+            : s
+        ).sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+        setSessions(updatedSessions);
+        saveSessions(updatedSessions);
+      }
+    } catch {
+      // 저장 실패는 조용히 무시
+    }
+  }, [messages, currentSessionId, getSessionStorageKey, sessions, saveSessions]);
+
 
   const handleSend = async (textInput: string) => {
     if (!textInput.trim() || isLoading) return;
@@ -140,9 +436,83 @@ How can I support your journey today?`,
   ];
 
   return (
-    <div className="h-[calc(100vh-4rem-3rem)] md:h-[calc(100vh-4rem)] max-w-5xl mx-auto p-4 md:p-6 flex flex-col">
-      {/* Header + Security Mode Toggle */}
-      <div className="flex-shrink-0 mb-6 flex items-start justify-between gap-3 flex-wrap">
+    <div className="h-[calc(100vh-4rem-3rem)] md:h-[calc(100vh-4rem)] flex">
+      {/* 사이드바 */}
+      <div className={`fixed md:static inset-y-0 left-0 z-50 w-64 bg-white border-r border-gray-200 transform transition-transform duration-300 ease-in-out ${
+        sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
+      }`}>
+        <div className="h-full flex flex-col">
+          {/* 사이드바 헤더 */}
+          <div className="p-4 border-b border-gray-200 flex items-center justify-between">
+            <h2 className="font-semibold text-gray-900">Chat History</h2>
+            <button
+              onClick={() => setSidebarOpen(false)}
+              className="md:hidden text-gray-500 hover:text-gray-700"
+            >
+              <X size={20} />
+            </button>
+          </div>
+          
+          {/* 새 채팅 버튼 */}
+          <div className="p-4 border-b border-gray-200">
+            <button
+              onClick={handleNewChat}
+              className="w-full flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 transition-colors"
+            >
+              <Sparkles size={18} />
+              <span className="font-medium">New Chat</span>
+            </button>
+          </div>
+          
+          {/* 세션 목록 */}
+          <div className="flex-1 overflow-y-auto p-2">
+            {sessions.length === 0 ? (
+              <div className="text-center text-gray-500 text-sm py-8">
+                <MessageSquare size={32} className="mx-auto mb-2 opacity-50" />
+                <p>No chat history</p>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {sessions.map((session) => (
+                  <div
+                    key={session.id}
+                    onClick={() => selectSession(session.id)}
+                    className={`group flex items-center gap-2 p-3 rounded-lg cursor-pointer transition-colors ${
+                      currentSessionId === session.id
+                        ? 'bg-primary-50 text-primary-700'
+                        : 'hover:bg-gray-50 text-gray-700'
+                    }`}
+                  >
+                    <MessageSquare size={16} className="shrink-0" />
+                    <span className="flex-1 text-sm truncate">{session.title}</span>
+                    <button
+                      onClick={(e) => deleteSession(session.id, e)}
+                      className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-100 rounded text-red-600 transition-opacity"
+                      title="Delete chat"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      
+      {/* 오버레이 (모바일) */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 z-40 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+      
+      {/* 메인 콘텐츠 */}
+      <div className="flex-1 flex flex-col min-w-0">
+        <div className="max-w-5xl mx-auto w-full p-4 md:p-6 flex flex-col h-full">
+          {/* Header + Security Mode Toggle + New Chat */}
+          <div className="flex-shrink-0 mb-6 flex items-start justify-between gap-3 flex-wrap">
         {/* 왼쪽: 제목 + 설명 */}
         <div>
           <h1 className="text-2xl font-extrabold text-gray-900 flex items-center gap-3">
@@ -157,29 +527,51 @@ How can I support your journey today?`,
           </p>
         </div>
 
-        {/* 🔐 Security Mode 버튼 */}
-        <button
-          type="button"
-          onClick={() => setIsSecurityMode((prev) => !prev)}
-          className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs md:text-sm font-semibold border transition
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* 사이드바 토글 버튼 (모바일) */}
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            className="md:hidden inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs md:text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+          >
+            <Menu size={16} className="text-gray-500" />
+            <span>History</span>
+          </button>
+          
+          {/* 새 채팅 버튼 */}
+          <button
+            type="button"
+            onClick={handleNewChat}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs md:text-sm font-semibold border border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+          >
+            <Sparkles size={16} className="text-gray-500" />
+            <span>New chat</span>
+          </button>
+
+          {/* 🔐 Security Mode 버튼 */}
+          <button
+            type="button"
+            onClick={() => setIsSecurityMode((prev) => !prev)}
+            className={`inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs md:text-sm font-semibold border transition
             ${
               isSecurityMode
                 ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                 : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
             }`}
-        >
-          {isSecurityMode ? (
-            <ShieldAlert size={16} className="text-emerald-600" />
-          ) : (
-            <Shield size={16} className="text-gray-500" />
-          )}
-          <span>Security Mode</span>
-          {isSecurityMode && (
-            <span className="hidden md:inline text-[10px] font-medium uppercase tracking-wide">
-              ON
-            </span>
-          )}
-        </button>
+          >
+            {isSecurityMode ? (
+              <ShieldAlert size={16} className="text-emerald-600" />
+            ) : (
+              <Shield size={16} className="text-gray-500" />
+            )}
+            <span>Security Mode</span>
+            {isSecurityMode && (
+              <span className="hidden md:inline text-[10px] font-medium uppercase tracking-wide">
+                ON
+              </span>
+            )}
+          </button>
+        </div>
       </div>
 
       {/* 보안 모드 안내 배너 */}
@@ -245,8 +637,8 @@ How can I support your journey today?`,
                       msg.role === 'user' ? 'text-right mr-1' : 'ml-1'
                     }`}
                   >
-                    {msg.timestamp.toLocaleTimeString([], {
-                      hour: '2-digit',
+                    {msg.timestamp.toLocaleTimeString('en-US', {
+                      hour: 'numeric',
                       minute: '2-digit',
                     })}
                   </span>
@@ -309,6 +701,8 @@ How can I support your journey today?`,
           <p className="text-xs text-center text-gray-400 mt-3">
             FinGuide AI can make mistakes. Consider checking important financial information.
           </p>
+        </div>
+      </div>
         </div>
       </div>
     </div>

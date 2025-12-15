@@ -338,7 +338,7 @@ const Dashboard: React.FC = () => {
 
         {/* Cash Card (USD + KRW) */}
         <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-200 min-w-0">
-          <div className="flex items-center justify-between mb-3 gap-2">
+           <div className="flex items-center justify-between mb-3 gap-2">
             <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider truncate min-w-0">
               Available Cash
             </h3>
